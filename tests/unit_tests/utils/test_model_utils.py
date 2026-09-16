@@ -1018,3 +1018,21 @@ def test_freeze_video_embedder_false_keeps_video_embedder_trainable(video_embedd
     )
 
     assert _all_requires_grad(video_embedder_model.patch_generator.video_embedder)
+
+
+@pytest.mark.parametrize("supports", [False, True])
+def test_logits_to_keep_capability_through_real_ddp(tmp_path, supports):
+    """A DDP wrapper must preserve its underlying model's loss capability."""
+
+    class SupportedLinear(nn.Linear):
+        def forward(self, input: torch.Tensor, logits_to_keep: int = 0) -> torch.Tensor:
+            """Project input [batch, features] to output [batch, outputs]."""
+            return super().forward(input)
+
+    model = SupportedLinear(2, 2) if supports else nn.Linear(2, 2)
+    torch.distributed.init_process_group("gloo", init_method=f"file://{tmp_path / 'dist'}", rank=0, world_size=1)
+    try:
+        wrapped = torch.nn.parallel.DistributedDataParallel(model)
+        assert model_utils._supports_logits_to_keep(wrapped) is supports
+    finally:
+        torch.distributed.destroy_process_group()

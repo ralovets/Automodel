@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Protocol
 
 import torch
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel
 
 from nemo_automodel.components.checkpoint._backports.hf_utils import (
     FQN_TO_DTYPE_MAPPING_FILENAME,
@@ -34,6 +33,7 @@ from nemo_automodel.components.moe.state_dict_mixin import (
     _PARAMWRAPPER_LAYOUT_MODERN,
     MoESplitExpertsStateDictMixin,
 )
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 from nemo_automodel.shared.parameter_names import canonical_parameter_fqn
 
 if TYPE_CHECKING:
@@ -51,13 +51,6 @@ def _is_group_rank_0(process_group: "ProcessGroup | None") -> bool:
 def _group_barrier(process_group: "ProcessGroup | None") -> None:
     if torch.distributed.is_initialized():
         torch.distributed.barrier(group=process_group)
-
-
-def _unwrap_ddp_model(model: nn.Module) -> nn.Module:
-    """Return the module that owns export metadata hidden by DDP."""
-    if isinstance(model, DistributedDataParallel):
-        return model.module
-    return model
 
 
 def _save_generated_hf_assets(
@@ -171,7 +164,7 @@ class ConsolidatedHFAddon:
         original_model_path = kwargs["original_model_path"]
         process_group = kwargs.get("process_group")
 
-        export_model = _unwrap_ddp_model(model_part)
+        export_model = unwrap_ddp_model(model_part)
         get_metadata_exporter = getattr(export_model, "_get_consolidated_hf_metadata_exporter", None)
         metadata_exporter: _ConsolidatedHFMetadataExporter | None = (
             get_metadata_exporter(
@@ -273,7 +266,7 @@ class PeftAddon:
         process_group = kwargs.get("process_group")
         hf_peft_config = _get_hf_peft_config(peft_config, model_state, v4_compatible=v4_compatible)
         automodel_peft_metadata = _get_automodel_peft_metadata(peft_config)
-        adapter = getattr(_unwrap_ddp_model(model_state.model[0]), "state_dict_adapter", None)
+        adapter = getattr(unwrap_ddp_model(model_state.model[0]), "state_dict_adapter", None)
         layout_stamp = _get_paramwrapper_layout_stamp(
             adapter, v4_compatible, kwargs.get("legacy_paramwrapper_layout", False)
         )

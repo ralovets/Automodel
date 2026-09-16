@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable
 
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 from nemo_automodel.shared.import_utils import safe_import
 from nemo_automodel.shared.parameter_names import canonical_parameter_fqn
 
@@ -77,7 +78,7 @@ def _supports_logits_to_keep(model: nn.Module) -> bool:
     Returns:
         bool: True if the model supports logits_to_keep, False otherwise.
     """
-    sig = _get_forward_signature(model)
+    sig = _get_forward_signature(unwrap_ddp_model(model))
     return sig is not None and "logits_to_keep" in sig.parameters
 
 
