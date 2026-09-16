@@ -959,7 +959,8 @@ class Qwen3_8_FlashNextPLELayer(nn.Module):
         ple_embedding: Raw-token n-gram embedding whose output has shape
             ``[batch, sequence, ple_embed_dim]``.
         hidden_size: Width of one HyperConnection branch.
-        hc_count: Number of persistent HyperConnection branches.
+        hc_count: Number of persistent residual branches, including one for
+            the dense model's ordinary-residual ablation.
         ple_embed_dim: Concatenated n-gram embedding width.
         backend: Backend configuration for the key and value projections.
         dtype: Explicit parameter dtype resolved from the model configuration.
@@ -982,8 +983,8 @@ class Qwen3_8_FlashNextPLELayer(nn.Module):
         super().__init__()
         if hidden_size <= 0:
             raise ValueError(f"hidden_size must be positive, got {hidden_size}")
-        if hc_count <= 1:
-            raise ValueError(f"hc_count must be greater than one, got {hc_count}")
+        if hc_count < 1:
+            raise ValueError(f"hc_count must be positive, got {hc_count}")
         if ple_embed_dim <= 0:
             raise ValueError(f"ple_embed_dim must be positive, got {ple_embed_dim}")
         if conv_kernel_size <= 0:

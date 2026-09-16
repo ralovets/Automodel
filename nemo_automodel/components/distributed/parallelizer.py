@@ -694,11 +694,15 @@ class NemotronHParallelizationStrategy(ParallelizationStrategy):
 
 
 class Qwen3_5ParallelizationStrategy(DefaultParallelizationStrategy):
-    """Parallelization strategy for Qwen3.5 dense models with mixed-dtype GatedDeltaNet.
+    """Parallelization strategy for dense models with mixed-dtype GatedDeltaNet.
 
     Qwen3.5 has linear_attn layers with float32 params (A_log, norm) alongside
     bfloat16 params. Overrides the FSDP sharding step to use fully_shard_by_dtype
     per layer, and sets the CP mesh on CPAwareGatedDeltaNet modules.
+
+    Also serves the Flash-Next student, which builds the same
+    ``CPAwareGatedDeltaNet`` layers and so carries the same fp32 ``_fp32_params``
+    holder inside otherwise-bf16 decoder layers.
     """
 
     def parallelize(self, model, device_mesh, dp_shard_cp_mesh_name="dp_shard_cp", **kwargs):
@@ -1126,6 +1130,9 @@ PARALLELIZATION_STRATEGIES: Dict[str, ParallelizationStrategy] = {
     "DeepseekV4ForCausalLM": DeepseekV4ParallelizationStrategy(),
     "Qwen3_5ForConditionalGeneration": Qwen3_5ParallelizationStrategy(),
     "Qwen3_5ForCausalLM": Qwen3_5ParallelizationStrategy(),
+    # Same GatedDeltaNet layers, so the same mixed-dtype decoder: plain
+    # fully_shard rejects a unit holding fp32 _fp32_params next to bf16 weights.
+    "Qwen3_8_FlashNextMiniForCausalLM": Qwen3_5ParallelizationStrategy(),
     "WanTransformer3DModel": WanParallelizationStrategy(),
     "HunyuanVideo15Transformer3DModel": HunyuanParallelizationStrategy(),
     "LTX2VideoTransformer3DModel": LTX2ParallelizationStrategy(),

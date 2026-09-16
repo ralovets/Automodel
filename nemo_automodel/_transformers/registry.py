@@ -326,6 +326,13 @@ MODEL_ARCH_MAPPING = OrderedDict(
             ("nemo_automodel.components.models.qwen3_8_flash_next.model", "Qwen3_8_FlashNextForConditionalGeneration"),
         ),
         (
+            "Qwen3_8_FlashNextMiniForCausalLM",
+            (
+                "nemo_automodel.components.models.qwen3_8_flash_next_mini.model",
+                "Qwen3_8_FlashNextMiniForCausalLM",
+            ),
+        ),
+        (
             "Step3p6ForConditionalGeneration",
             ("nemo_automodel.components.models.step3p7.model", "Step3p7ForConditionalGeneration"),
         ),
@@ -380,6 +387,14 @@ _CUSTOM_CONFIG_REGISTRATIONS: Dict[str, Tuple[str, str]] = {
     "qwen3_8_flash_next_text": (
         "nemo_automodel.components.models.qwen3_8_flash_next.config",
         "Qwen3_8_FlashNextTextConfig",
+    ),
+    "qwen3_8_flash_next_mini": (
+        "nemo_automodel.components.models.qwen3_8_flash_next_mini.config",
+        "Qwen3_8_FlashNextMiniConfig",
+    ),
+    "qwen3_8_flash_next_mini_text": (
+        "nemo_automodel.components.models.qwen3_8_flash_next_mini.config",
+        "Qwen3_8_FlashNextMiniTextConfig",
     ),
     # Immutable checkpoint dumps predate the Qwen3.8-Flash-Next rename.
     "qwen4_exp": (
