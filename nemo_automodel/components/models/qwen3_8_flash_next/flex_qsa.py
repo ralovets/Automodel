@@ -37,6 +37,63 @@ def _compiled_flex():
     return torch.compile(flex_attention, dynamic=False)
 
 
+# FlexAttention's default backward tiling needs ~114 KB of shared memory at
+# head_dim 256. Cards that expose less (for example RTX PRO 6000 Blackwell, at
+# 101376 B) fail autotuning with "No valid triton configs". Smaller blocks fit
+# and change tiling only, not results.
+_SMALL_FLEX_BLOCKS = {
+    "BLOCK_M": 32,
+    "BLOCK_N": 32,
+    "BLOCK_M1": 32,
+    "BLOCK_N1": 32,
+    "BLOCK_M2": 32,
+    "BLOCK_N2": 32,
+    "num_stages": 1,
+    "num_warps": 4,
+}
+# Shared memory the default backward tiling requires, per unit of head_dim:
+# 114688 B measured at head_dim 256, and the tiles scale linearly with it.
+_DEFAULT_FLEX_BACKWARD_SMEM_PER_HEAD_DIM = 448
+
+
+@functools.lru_cache(maxsize=None)
+def _shared_memory_per_block_optin(device_index: int) -> int | None:
+    """Return a CUDA device's opt-in shared memory per block, in bytes.
+
+    Cached because the check runs on every attention call.
+
+    Args:
+        device_index: CUDA device ordinal.
+
+    Returns:
+        The device's opt-in shared-memory limit, or ``None`` when this build of
+        PyTorch does not report it.
+    """
+    available = getattr(torch.cuda.get_device_properties(device_index), "shared_memory_per_block_optin", None)
+    return None if available is None else int(available)
+
+
+def _needs_small_flex_blocks(query: torch.Tensor) -> bool:
+    """Return whether this device needs reduced FlexAttention block sizes.
+
+    Args:
+        query: Query tensor of shape ``[batch, heads, sequence, head_dim]`` or
+            ``[batch, sequence, heads, head_dim]``; only its device and final
+            head dimension are read.
+
+    Returns:
+        ``True`` when the device's opt-in shared memory cannot hold the default
+        backward tiling for this head dimension. Unknown limits return
+        ``False``, keeping the stock tiling.
+    """
+    if not query.is_cuda:
+        return False
+    available = _shared_memory_per_block_optin(query.device.index)
+    if available is None:
+        return False
+    return available < _DEFAULT_FLEX_BACKWARD_SMEM_PER_HEAD_DIM * query.shape[-1]
+
+
 def _routes_to_membership(
     selected_token_ids: torch.Tensor,
     kv_length: int,
@@ -166,13 +223,14 @@ def flex_sparse_gqa_attention(
         KV_LEN=kv_length,
         device=str(query.device),
     )
+    flex_kwargs = {"block_mask": block_mask, "scale": scale, "enable_gqa": True}
+    if _needs_small_flex_blocks(query):
+        flex_kwargs["kernel_options"] = _SMALL_FLEX_BLOCKS
     output = _compiled_flex()(
         query.permute(0, 2, 1, 3),
         key.permute(0, 2, 1, 3),
         value.permute(0, 2, 1, 3),
-        block_mask=block_mask,
-        scale=scale,
-        enable_gqa=True,
+        **flex_kwargs,
     ).permute(0, 2, 1, 3)
     # Padding-query rows (no real routes) must be exactly zero in both output
     # and gradient, matching the oracle and the padded-gap training contract.
