@@ -431,9 +431,11 @@ class Qwen3_8_FlashNextHyperConnection(nn.Module):
             raise ValueError(f"Expected residual width {self.flat_hidden_size}, got {residual.hidden_states.shape[-1]}")
         projection_input = residual.normalized_states.to(dtype=self.block_inject_weight.weight.dtype)
         injection_gate = 2.0 * torch.sigmoid(self.block_inject_weight(projection_input) / self.hc_count)
-        streams = residual.hidden_states.unflatten(-1, (self.hc_count, self.hidden_size))
         injection = block_output.unsqueeze(-2) * injection_gate.unsqueeze(-1)
-        return (streams + injection).flatten(-2)
+        # Add in the flattened layout: flattening the sum instead returns a view,
+        # and a layer that returns a view makes FSDP2 drop its pre-backward hook,
+        # skipping the all-gather and corrupting gradients.
+        return residual.hidden_states + injection.flatten(-2)
 
     @torch.no_grad()
     def init_weights(self, init_std: float = 0.02) -> None:
@@ -781,6 +783,9 @@ class Qwen3_8_FlashNextDecoderLayer(nn.Module):
         if self.layer_type == "full_attention":
             self.self_attn.init_weights(buffer_device, init_std=init_std)
         else:
+            # Meta materialization leaves convolution storage uninitialized;
+            # scratch training cannot rely on the constructor's reset_parameters.
+            self.linear_attn.conv1d.reset_parameters()
             self.linear_attn.dt_bias.fill_(1.0)
             self.linear_attn.A_log.uniform_(0, 16).log_()
             for linear in (

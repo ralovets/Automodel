@@ -491,6 +491,13 @@ class Fp32SafeQwen3_5MoeTextRotaryEmbedding(Qwen3_5MoeTextRotaryEmbedding):
     def _apply(self, fn: Any, recurse: bool = True):
         inv_freq_fp32 = self.inv_freq.detach().clone().to(torch.float32)
         result = super()._apply(fn, recurse=recurse)
+        if inv_freq_fp32.is_meta and not self.inv_freq.is_meta:
+            # Meta tensors contain no frequencies to preserve. Rebuild through
+            # the HF initializer on the destination device before the first use.
+            with torch.device(self.inv_freq.device):
+                reference = Qwen3_5MoeTextRotaryEmbedding(self.config, device=self.inv_freq.device)
+            inv_freq_fp32 = reference.inv_freq
+            self.register_buffer("original_inv_freq", reference.original_inv_freq, persistent=False)
         self.register_buffer(
             "inv_freq",
             inv_freq_fp32.to(device=self.inv_freq.device),

@@ -402,6 +402,10 @@ class Qwen3_8_FlashNextTextModelBackend(nn.Module):
         Args:
             buffer_device: Device used by layer initializers.
         """
+        # The checkpointer materializes meta buffers with empty storage. RoPE
+        # frequencies must be recomputed from config, not cast from that storage.
+        with torch.device(buffer_device):
+            self.rotary_emb = Fp32SafeQwen3_5MoeTextRotaryEmbedding(config=self.config, device=buffer_device)
         nn.init.normal_(self.embed_tokens.weight, mean=0.0, std=self.config.initializer_range)
         for layer in self.layers.values():
             layer.init_weights(buffer_device, init_std=self.config.initializer_range)
