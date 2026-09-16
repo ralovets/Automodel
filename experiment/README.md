@@ -54,9 +54,23 @@ bash experiment/run.sh gr-off --model.config.text_config.use_gr false
 ```
 
 Inside the container the corpus is `/data` (read-only), outputs `/outputs`, and
-the checkout `/opt/Automodel`. Metrics go to W&B and to JSONL files under the
-output directory; the console log is `OUTPUT_DIR/RUN_NAME.log`. Global batch
-must divide by microbatch times rank count.
+the checkout `/opt/Automodel`. Metrics go to W&B and to JSONL files under
+`OUTPUT_DIR/RUN_NAME/`; the console log is `OUTPUT_DIR/RUN_NAME.log`. The first
+launch builds a dataset index cache under `OUTPUT_DIR/dataset-cache` (a few
+hundred MB, about a minute). Global batch must divide by microbatch times rank
+count. W&B records the YAML as given; model geometry comes from the config class
+defaults, so read the parameter count from the log (1,122,283,392 for the base).
+
+A short first check on two GPUs:
+
+```bash
+bash experiment/run.sh smoke --step_scheduler.max_steps 24 \
+  --lr_scheduler.lr_warmup_steps 4 --step_scheduler.val_every_steps 12
+```
+
+A healthy run reaches step 0 within a minute or two, drops the training loss
+from about 10.5 to about 8.1 over 24 updates, and reports finite l2, l3 and
+english losses at steps 12 and 24.
 
 ## Dataset and tokenizer
 
