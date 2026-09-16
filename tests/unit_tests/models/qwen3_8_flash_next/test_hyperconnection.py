@@ -133,3 +133,26 @@ def test_hyperconnection_preserves_fp32_residual_with_bf16_projections() -> None
     for parameter in layer.parameters():
         assert parameter.grad is not None and parameter.grad.dtype == parameter.dtype
         assert torch.isfinite(parameter.grad).all()
+
+
+def test_hyperconnection_combine_returns_a_tensor_that_owns_its_storage() -> None:
+    """A decoder layer returning a view makes FSDP2 skip the pre-backward all-gather.
+
+    ``combine`` produces the decoder layer's return value, so the tensor it hands
+    back must own its storage rather than alias the sum it was computed from.
+    """
+    torch.manual_seed(13)
+    layer = Qwen3_8_FlashNextHyperConnection(
+        hidden_size=4,
+        hc_count=3,
+        lowrank_size=5,
+        rms_norm_eps=1e-6,
+        backend=BackendConfig(linear="torch"),
+        dtype=torch.float32,
+    )
+    _, residual = layer.mix(torch.randn(2, 3, 12))
+
+    combined = layer.combine(torch.randn(2, 3, 4), residual)
+
+    assert combined._base is None, "combine returned a view; FSDP2 cannot hook it safely"
+    assert combined.shape == (2, 3, 12)
