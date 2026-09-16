@@ -21,6 +21,7 @@ import torch.nn as nn
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 from nemo_automodel.shared.parameter_names import canonical_parameter_fqn
 
 
@@ -76,6 +77,7 @@ def is_tied_word_embeddings(model: nn.Module) -> bool:
     Returns:
         ``True`` if the model's word embeddings are tied, otherwise ``False``.
     """
+    model = unwrap_ddp_model(model)
     support = getattr(model, "tie_word_embeddings_support", None)
     if support is TieSupport.TIED_ONLY:
         return True
@@ -105,6 +107,7 @@ def get_lm_head_weight_and_name(model: nn.Module) -> tuple[torch.Tensor | None, 
         conventionally ``[V, H]`` where ``V`` is vocabulary size and ``H`` is
         hidden size.
     """
+    model = unwrap_ddp_model(model)
     for name, param in model.named_parameters(remove_duplicate=False):
         normalized_name = _normalize_param_name(name)
         if "lm_head" in normalized_name and normalized_name.endswith(".weight"):
@@ -124,6 +127,7 @@ def get_input_embeddings_weight_and_name(model: nn.Module) -> tuple[torch.Tensor
         tensor shape is conventionally ``[V, H]`` where ``V`` is vocabulary size
         and ``H`` is hidden size.
     """
+    model = unwrap_ddp_model(model)
     get_input_embeddings = getattr(model, "get_input_embeddings", None)
     if callable(get_input_embeddings):
         try:
@@ -209,6 +213,7 @@ def has_local_tied_lm_head(model: nn.Module) -> bool:
         ``True`` when the local ``lm_head`` and input embedding both exist, have
         compatible shapes, and alias the same storage; otherwise ``False``.
     """
+    model = unwrap_ddp_model(model)
     if not is_tied_word_embeddings(model):
         return False
     lm_head_weight, _ = get_lm_head_weight_and_name(model)
@@ -246,6 +251,7 @@ def ensure_tied_lm_head(model: nn.Module) -> bool:
         ``True`` if the local ``lm_head`` and input embedding are tied after the
         call, otherwise ``False``.
     """
+    model = unwrap_ddp_model(model)
     if not is_tied_word_embeddings(model):
         return False
     if has_local_tied_lm_head(model):

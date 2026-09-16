@@ -36,6 +36,7 @@ from nemo_automodel.components.moe.state_dict_mixin import (
     _PARAMWRAPPER_LAYOUT_MODERN,
     MoESplitExpertsStateDictMixin,
 )
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 from nemo_automodel.shared.parameter_names import canonical_parameter_fqn
 from nemo_automodel.shared.peft_config import PeftConfig as _AutomodelPeftConfig
 

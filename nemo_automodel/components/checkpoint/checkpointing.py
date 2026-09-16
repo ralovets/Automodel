@@ -94,6 +94,7 @@ from nemo_automodel.components.checkpoint.utils import (
     materialize_missing_tied_lm_head,
     unwrap_ddp_model,
 )
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 from nemo_automodel.shared.embedding_padding import zero_embedding_row_
 from nemo_automodel.shared.import_utils import get_torch_version
 from nemo_automodel.shared.parameter_names import canonical_parameter_fqn
