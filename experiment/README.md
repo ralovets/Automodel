@@ -21,6 +21,41 @@ The base is a 200-step smoke schedule: LR 6e-4 with 32 warmup steps, global
 batch 16 (65,536 tokens per update), validation every 100 updates, no
 checkpoints. Pick a token budget and LR schedule before a long run.
 
+## Arm A: 50B-token run
+
+[arm_a_50b.yaml](arm_a_50b.yaml) trains the GR-off, FFN-6144 baseline
+(982,620,032 parameters). It uses 762,940 updates of 65,536 tokens, for
+50,000,035,840 training tokens. The 49.7B-token training split is sampled to
+this budget; `num_epochs: null` derives enough epochs to reach the step
+target instead of stopping after one pass. Validation and test data are not
+included in training.
+
+The schedule warms up from zero to LR 6e-4 over 2,000 updates, then decays
+with cosine to 6e-5. These are starting settings, not results of the LR sweep.
+Validation and checkpoints run together every 5,000 updates: approximately
+91 minutes at 60k training tokens/s, plus validation and save overhead. Retention keeps
+the latest five complete checkpoints and any older checkpoint protected by
+a pointer such as `LOWEST_VAL`. Final training completion also saves a
+checkpoint and exports consolidated HF weights.
+
+```bash
+RECIPE=experiment/arm_a_50b.yaml bash experiment/run.sh arm-a-50b
+```
+
+W&B and JSONL metrics are both enabled. The run name is also the W&B run ID,
+so use a unique name for a fresh experiment. To continue after stopping,
+repeat the same command: the recipe auto-loads the latest complete checkpoint
+in that run's directory and reconnects to the same W&B run. An explicit
+`--checkpoint.restore_from LATEST` is also supported. Keep the complete
+checkpoint: it includes per-rank stateful dataloader position, RNG, model,
+optimizer, LR scheduler and step scheduler. Resume from the last saved update;
+work since that checkpoint is replayed. Keep the dataset, seeds, token budget,
+batch size and rank count unchanged so the dataset indices remain identical.
+
+Run under `nohup` or `tmux` on the GPU host so disconnecting SSH does not stop
+training. On `roman-ws`, use `OUTPUT_DIR=/home/roman/storage/checkpoints/custom1b`
+to put checkpoints on the storage drive.
+
 ## Setup and launch
 
 Build the training image from the repository root:
@@ -43,7 +78,8 @@ uvx --from huggingface_hub hf download ralovets/cl32k-python-english-50b-v2 \
 
 `run.sh` takes a run name and optional recipe overrides. Machine settings are
 environment variables with defaults at the top of the script: `IMAGE`, `NPROC`,
-`DATA_DIR`, `OUTPUT_DIR`, `OMP_NUM_THREADS`. W&B credentials come from
+`RECIPE` (defaults to `experiment/base.yaml`), `DATA_DIR`, `OUTPUT_DIR`,
+`OMP_NUM_THREADS`. W&B credentials come from
 `WANDB_API_KEY`, `WANDB_BASE_URL`, `WANDB_ENTITY`; set `WANDB_MODE=offline` when
 no server is reachable.
 
