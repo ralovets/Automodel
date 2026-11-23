@@ -53,6 +53,8 @@ class Inkling2DenseConfig(Inkling2TextConfig):
     ) -> None:
         if not tie_word_embeddings:
             raise ValueError("The dense Inkling2 model ties its output projection to the token embedding")
+        if not kwargs.get("attn_res_normalize_values", True):
+            raise ValueError("The dense Inkling2 model mixes normalized depth blocks only")
         # Hugging Face owns the open-ended serialized metadata at this boundary.
         super().__init__(
             hidden_size=hidden_size,
@@ -70,6 +72,8 @@ class Inkling2DenseConfig(Inkling2TextConfig):
             **kwargs,
         )
         self.tie_word_embeddings = True
+        if self.unpadded_vocab_size != self.vocab_size:
+            raise ValueError("The dense Inkling2 model has no padded vocabulary rows")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize without the parent's expert routing fields."""
