@@ -87,6 +87,45 @@ Both recipes are 200-step smoke schedules: LR 6e-4 with 32 warmup steps,
 global batch 16 (65,536 tokens per update), validation every 100 updates, no
 checkpoints. Pick a token budget and LR schedule before a long run.
 
+## Tokenizer trial on corpus-v1
+
+[nano_tok16k.yaml](nano_tok16k.yaml) is nano with a 16,384-entry vocabulary
+(411,038,720 parameters). It reads a dataset written by
+[prepare_data.py](prepare_data.py), so one recipe serves the Claude-style
+tokenizer and the BPE baseline; `DATA_DIR` selects which.
+
+The Claude-style tokenizer needs its Rust core, which the training image does
+not have. Build the wheel from the tokenizer project and add it to the image:
+
+```bash
+uvx maturin build --release -m native/Cargo.toml -i python3.12 --out wheels
+docker build -f experiment/tokenizer.Dockerfile -t automodel:mini2-tok wheels
+```
+
+`prepare_data.py` tokenizes JSONL documents (`text`, `domain`) into training
+shards and one heldout per domain, each a fixed 4 MiB draw of the heldout file,
+the same documents for every tokenizer. It runs inside that image:
+
+```bash
+python experiment/prepare_data.py --tokenizer TOKENIZER_DIR \
+  --train train-b.jsonl --holdout holdout.jsonl --output DATA_DIR
+```
+
+On roman-ws both datasets are under `~/data/datasets/corpus-v1-trial-b/`,
+built from sample B of corpus-v1 (2.4B o200k tokens, not used to train
+`claude-a-16k`) and its 120M-token heldout:
+
+```bash
+D=$HOME/data/datasets/corpus-v1-trial-b
+IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/claude-a-16k \
+  bash experiment/run.sh tok-claude-a
+IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/bpe-lines-a-16k \
+  bash experiment/run.sh tok-bpe-a
+```
+
+Loss per token is not comparable across tokenizers. `DATA_DIR/stats.json` has
+bytes and tokens per heldout: bits per byte = loss × tokens / bytes / ln 2.
+
 ## Results
 
 200-step smoke runs, DDP on two RTX PRO 6000 Blackwell cards, local batch 1,
