@@ -27,12 +27,18 @@ def unwrap_ddp_model(model: nn.Module) -> nn.Module:
     and methods such as ``tie_weights`` never reach ``.module``. FSDP2 is
     unaffected because ``fully_shard`` mutates the module in place.
 
+    A DDP wrapper that was itself compiled is also seen through: ``torch.compile``
+    returns a module that forwards attribute access to the DDP wrapper it holds.
+
     Args:
-        model: Possibly DDP-wrapped model.
+        model: Possibly DDP-wrapped model, possibly compiled after wrapping.
 
     Returns:
         The underlying module, or ``model`` when it is not DDP-wrapped.
     """
+    compiled = getattr(model, "_orig_mod", None)
+    if isinstance(compiled, DistributedDataParallel):
+        return compiled.module
     if isinstance(model, DistributedDataParallel):
         return model.module
     return model

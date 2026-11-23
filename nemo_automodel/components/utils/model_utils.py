@@ -49,6 +49,10 @@ def _get_cached_forward_signature(forward_callable: Callable[..., Any]) -> inspe
 
 def _get_forward_signature(model: nn.Module) -> inspect.Signature | None:
     """Retrieve ``model.forward`` once per callable, preserving live patches."""
+    # torch.compile wraps a module in one whose forward is (*args, **kwargs); read the original.
+    original = getattr(model, "_orig_mod", None)
+    if isinstance(original, nn.Module):
+        model = original
     forward = getattr(model, "forward", None)
     if not callable(forward):
         return None

@@ -1191,3 +1191,24 @@ def test_filter_forward_kwargs_through_real_ddp(tmp_path):
         assert set(batch) == {"input", "loss_mask"}
     finally:
         torch.distributed.destroy_process_group()
+
+
+def test_filter_forward_kwargs_through_a_compiled_module(tmp_path):
+    """torch.compile's wrapper forward accepts everything; the wrapped model's signature decides."""
+
+    class Model(nn.Linear):
+        def forward(self, input: torch.Tensor, logits_to_keep: int = 0) -> torch.Tensor:
+            """Project input [batch, features] to output [batch, outputs]."""
+            return super().forward(input)
+
+    compiled = torch.compile(Model(2, 2))
+    batch = {"input": torch.zeros(1, 2), "loss_mask": torch.ones(1, 2)}
+    assert set(model_utils.filter_forward_kwargs(compiled, batch)) == {"input"}
+    assert model_utils._supports_logits_to_keep(compiled)
+    torch.distributed.init_process_group("gloo", init_method=f"file://{tmp_path / 'dist'}", rank=0, world_size=1)
+    try:
+        compiled_ddp = torch.compile(torch.nn.parallel.DistributedDataParallel(Model(2, 2)))
+        assert set(model_utils.filter_forward_kwargs(compiled_ddp, batch)) == {"input"}
+        assert model_utils._supports_logits_to_keep(compiled_ddp)
+    finally:
+        torch.distributed.destroy_process_group()
