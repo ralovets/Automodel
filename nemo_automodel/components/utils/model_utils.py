@@ -142,8 +142,10 @@ def filter_forward_kwargs(model: nn.Module, kwargs: dict) -> dict:
 
     If the model exposes ``**kwargs`` or its signature cannot be inspected, the
     input kwargs are returned unchanged. The original dict is never mutated.
+    A DDP wrapper is seen through: its own ``forward(*inputs, **kwargs)`` would
+    otherwise let every key reach the wrapped model.
     """
-    sig = _get_forward_signature(model)
+    sig = _get_forward_signature(unwrap_ddp_model(model))
     if sig is None:
         return dict(kwargs)
 

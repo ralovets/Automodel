@@ -1173,3 +1173,21 @@ def test_logits_to_keep_capability_through_real_ddp(tmp_path, supports):
         assert model_utils._supports_logits_to_keep(wrapped) is supports
     finally:
         torch.distributed.destroy_process_group()
+
+
+def test_filter_forward_kwargs_through_real_ddp(tmp_path):
+    """Keys the wrapped model's forward does not accept are dropped under DDP too."""
+
+    class Model(nn.Linear):
+        def forward(self, input: torch.Tensor) -> torch.Tensor:
+            """Project input [batch, features] to output [batch, outputs]."""
+            return super().forward(input)
+
+    torch.distributed.init_process_group("gloo", init_method=f"file://{tmp_path / 'dist'}", rank=0, world_size=1)
+    try:
+        wrapped = torch.nn.parallel.DistributedDataParallel(Model(2, 2))
+        batch = {"input": torch.zeros(1, 2), "loss_mask": torch.ones(1, 2)}
+        assert set(model_utils.filter_forward_kwargs(wrapped, batch)) == {"input"}
+        assert set(batch) == {"input", "loss_mask"}
+    finally:
+        torch.distributed.destroy_process_group()
