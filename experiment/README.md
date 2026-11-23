@@ -151,6 +151,11 @@ Tried and left out:
 What is left: the attention kernel is about a fifth of nano's step, and most of
 that is the per-pair relative-position lookup in its backward.
 
+With the loop at two passes (36 layer applications instead of 24), single-GPU
+forward and backward is 19.6K tokens/s for nano and 7.6K for micro, against
+35.3K and 13.4K without it. The message gates between passes still use the
+upstream FP32 modules and have not been tuned.
+
 ## Tests
 
 ```bash
