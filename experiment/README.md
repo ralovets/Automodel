@@ -126,6 +126,22 @@ IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/bpe-lin
 Loss per token is not comparable across tokenizers. `DATA_DIR/stats.json` has
 bytes and tokens per heldout: bits per byte = loss × tokens / bytes / ln 2.
 
+The 200-step smoke of each ran at 66K tokens/s. Bits per byte at step 199, one
+seed, 13M training tokens, so a check that the path works and not a verdict:
+
+| Heldout | claude-a-16k | bpe-lines-a-16k |
+|---|---:|---:|
+| python | 1.694 | 1.748 |
+| code_other | 1.882 | 1.946 |
+| code_qa | 1.564 | 1.621 |
+| tech | 1.949 | 1.990 |
+| math | 1.831 | 1.914 |
+| general | 2.137 | 2.195 |
+| multilingual | 3.291 | 3.257 |
+
+The seven heldouts are 8.7M tokens together and one pass takes about two
+minutes; lower `--holdout-bytes` or validate less often for long runs.
+
 ## Results
 
 200-step smoke runs, DDP on two RTX PRO 6000 Blackwell cards, local batch 1,
