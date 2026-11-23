@@ -35,6 +35,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from nemo_automodel.components.training.batch import move_batch_to_device
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 from nemo_automodel.shared.import_utils import safe_import
 
 _HAS_MLFLOW, mlflow = safe_import(
@@ -769,9 +770,9 @@ class TrainFinetuneRecipeForNextTokenPrediction(BaseRecipe):
         self.loss_fn = _maybe_downgrade_loss_fn(self.loss_fn, self.model_parts[0], self.pp is not None)
 
         # Extract the TE quantization config (te_fp8 or te_nvfp4) from model backend (set after model construction)
-        self.te_quantization = (
-            self.model_parts[0].backend.te_quantization if hasattr(self.model_parts[0], "backend") else None
-        )
+        # DDP wraps the model in a new object that does not expose ``backend``.
+        backend_owner = unwrap_ddp_model(self.model_parts[0])
+        self.te_quantization = backend_owner.backend.te_quantization if hasattr(backend_owner, "backend") else None
         if self.te_quantization is not None:
             # Modules named in its exclude_fqns (lm_head by default) run outside the TE autocast.
             for part in self.model_parts:
