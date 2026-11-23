@@ -21,11 +21,10 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
 
-from nemo_automodel.components.models.inkling2.layers import L2Clip
 from nemo_automodel.shared.import_utils import safe_import_from
 
 from .config import Inkling2DenseConfig
-from .layers import ShortConvolution, TokenLayout, rms_scale
+from .layers import L2Clip, ShortConvolution, TokenLayout, rms_scale
 
 if TYPE_CHECKING:
     from torch.nn.attention.flex_attention import AuxOutput
@@ -255,9 +254,13 @@ class Inkling2DenseAttention(nn.Module):
         if self.length_scale is not None:
             alpha, floor = self.length_scale
             tau = 1 + alpha * torch.log(((layout.positions.float() + 1) / floor).clamp(min=1))
-        q = self.q_l2_clip(q.view(batch, sequence, self.heads, self.head_dim), tau=tau)
+        q = self.q_l2_clip(q.view(batch, sequence, self.heads, self.head_dim))
         k = self.k_l2_clip(k.view(batch, sequence, self.kv_heads, self.head_dim))
-        r = self.rel_l2_clip(r.view(batch, sequence, self.heads, self.d_rel), tau=tau)
+        r = self.rel_l2_clip(r.view(batch, sequence, self.heads, self.d_rel))
+        if tau is not None:
+            # Query and relative features grow with the logarithm of the position.
+            q = q * tau[..., None, None].to(dtype)
+            r = r * tau[..., None, None].to(dtype)
         v = v.view(batch, sequence, self.kv_heads, self.head_dim)
         if self.value_norm:
             v = rms_scale(v, self.eps)

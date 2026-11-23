@@ -125,17 +125,17 @@ class Inkling2DenseDecoderLayer(nn.Module):
         state: DepthState,
         layout: TokenLayout,
         masks: AttentionMasks | None,
-        bank: tuple[torch.Tensor, ...] | None = None,
+        bank: DepthState | None = None,
         message_queries: torch.Tensor | None = None,
     ) -> DepthState:
         """Advance a depth block; a new block begins after a boundary layer's attention.
 
         Args:
-            state: Normalized completed blocks and the partial block, each [batch, sequence, hidden].
+            state: Normalized completed blocks and the partial block; see ``DepthState``.
             layout: Token validity and document layout of this forward call.
             masks: FlexAttention block masks of this forward call; None with eager attention.
-            bank: RMS-normalized depth sources the previous loop pass wrote, each
-                [batch, sequence, hidden]; None in the first pass and outside the loop core.
+            bank: Depth blocks the previous loop pass wrote, with its final partial block
+                already RMS-normalized; None in the first pass and outside the loop core.
             message_queries: FP32 tensor of shape [4, hidden] with this layer's queries for the
                 attention Q, K, V and feed-forward inputs; given together with ``bank``.
 
@@ -147,13 +147,13 @@ class Inkling2DenseDecoderLayer(nn.Module):
         streams = (
             (state.partial,) * count
             if self.attn_query is None
-            else mix_depth((*state.blocks, normalized_partial), self.attn_query.weight)
+            else mix_depth(state.blocks, normalized_partial, self.attn_query.weight)
         )
         norms = tuple(self.attn_norms)
         messages = None
         if bank is not None:
             assert message_queries is not None
-            messages = mix_depth(bank, message_queries)
+            messages = mix_depth(bank.blocks, bank.partial, message_queries)
             # In later passes a local layer also gets separate Q, K and V inputs, through its one norm.
             streams, norms = (streams * 3, norms * 3) if self.is_local else (streams, norms)
             streams = tuple(
@@ -164,10 +164,12 @@ class Inkling2DenseDecoderLayer(nn.Module):
         sources = AttentionSources(normed[0], normed[0], normed[0]) if len(normed) == 1 else AttentionSources(*normed)
         attention = self.attn_sconv(self.attn(sources, layout, masks), layout)
         if self.is_boundary:
-            blocks, partial = (*state.blocks, normalized_partial), attention
+            sealed = normalized_partial.unsqueeze(2)
+            blocks = sealed if state.blocks is None else torch.cat((state.blocks, sealed), dim=2)
+            partial = attention
         else:
             blocks, partial = state.blocks, state.partial + attention
-        mlp_stream = mix_depth((*blocks, rms_scale(partial)), self.mlp_query.weight)[0]
+        mlp_stream = mix_depth(blocks, rms_scale(partial), self.mlp_query.weight)[0]
         if messages is not None:
             mlp_stream = self._apply_message("mlp", mlp_stream, messages[3])
         mlp = self.mlp_sconv(self.mlp(self.mlp_norm(mlp_stream)), layout)
@@ -330,8 +332,8 @@ class Inkling2DenseForCausalLM(HFCheckpointingMixin, nn.Module):
             hidden = self.embed_norm(embedded)
             if layout.valid is not None:
                 hidden = hidden * layout.valid
-            state = self._run_layers(DepthState((), hidden), layout, masks)
-            mixed = mix_depth((*state.blocks, rms_scale(state.partial)), self.output_query.weight)[0]
+            state = self._run_layers(DepthState(None, hidden), layout, masks)
+            mixed = mix_depth(state.blocks, rms_scale(state.partial), self.output_query.weight)[0]
             hidden = self.norm(mixed)
             if isinstance(logits_to_keep, int):
                 if logits_to_keep < 0:
@@ -353,7 +355,7 @@ class Inkling2DenseForCausalLM(HFCheckpointingMixin, nn.Module):
         """Run every layer once, or the loop core once per pass with messages between passes.
 
         Args:
-            state: Depth state entering the first layer, tensors of shape [batch, sequence, hidden].
+            state: Depth state entering the first layer; see ``DepthState``.
             layout: Token validity and document layout of this forward call.
             masks: FlexAttention block masks of this forward call; None with eager attention.
 
@@ -376,7 +378,9 @@ class Inkling2DenseForCausalLM(HFCheckpointingMixin, nn.Module):
             if pass_index:
                 # The first core layer seals the prelude's partial block; later blocks and the
                 # final partial block are what this pass wrote.
-                bank = (*state.blocks[len(prelude.blocks) + 1 :], rms_scale(state.partial))
+                assert state.blocks is not None
+                written = state.blocks[:, :, (0 if prelude.blocks is None else prelude.blocks.shape[2]) + 1 :]
+                bank = DepthState(written if written.shape[2] else None, rms_scale(state.partial))
                 state = prelude
             for offset, index in enumerate(core):
                 # Row 2 * offset holds the attention Q (or K) query, the next row the feed-forward (or V) query.

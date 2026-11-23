@@ -20,7 +20,9 @@ completed depth blocks are normalized once, and the short convolution is a few
 shifted multiply-adds.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import ParamSpec
 
 import torch
 from torch import nn
@@ -53,17 +55,37 @@ class TokenLayout:
 
 @dataclass(frozen=True)
 class DepthState:
-    """Residual state between layers; every tensor has shape [batch, sequence, hidden].
+    """Residual state between layers.
 
     Attributes:
-        blocks: Completed depth blocks, each already RMS-normalized over hidden.
-        partial: Current incomplete block, not normalized.
+        blocks: Completed depth blocks, each already RMS-normalized over hidden, stacked
+            as [batch, sequence, blocks, hidden]; None before the first block completes.
+        partial: Current incomplete block of shape [batch, sequence, hidden], not normalized.
     """
 
-    blocks: tuple[torch.Tensor, ...]
+    blocks: torch.Tensor | None
     partial: torch.Tensor
 
 
+_Arguments = ParamSpec("_Arguments")
+
+
+def _fused(function: Callable[_Arguments, torch.Tensor]) -> Callable[_Arguments, torch.Tensor]:
+    """Compile an elementwise chain into one forward and one backward kernel on CUDA.
+
+    The compiled function is shared by every layer, so it compiles once per distinct
+    input shape. CPU calls run the plain function.
+    """
+    compiled = torch.compile(function, dynamic=False)
+
+    def dispatch(*args: _Arguments.args, **kwargs: _Arguments.kwargs) -> torch.Tensor:
+        first = args[0]
+        return (compiled if isinstance(first, torch.Tensor) and first.is_cuda else function)(*args, **kwargs)
+
+    return dispatch
+
+
+@_fused
 def rms_scale(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Divide by the root mean square over the last axis, reduced in FP32.
 
@@ -78,30 +100,51 @@ def rms_scale(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return x * torch.rsqrt(mean_square + eps).to(x.dtype)
 
 
-def mix_depth(sources: tuple[torch.Tensor, ...], queries: torch.Tensor) -> tuple[torch.Tensor, ...]:
+@_fused
+def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+    """Scale x of shape [..., features] to unit root mean square, then by weight of shape [features]."""
+    mean_square = torch.linalg.vector_norm(x, dim=-1, keepdim=True, dtype=torch.float32).square() / x.shape[-1]
+    return x * torch.rsqrt(mean_square + eps).to(x.dtype) * weight
+
+
+@_fused
+def l2_clip(x: torch.Tensor, scale: torch.Tensor | None, threshold: float) -> torch.Tensor:
+    """Scale each vector, then shrink it to at most ``threshold`` in L2 norm, reduced in FP32.
+
+    Args:
+        x: Tensor of shape [batch, sequence, heads, width].
+        scale: Tensor of shape [heads, width] applied before clipping, or None.
+        threshold: Largest L2 norm over the last axis after clipping.
+
+    Returns:
+        Tensor of x's shape and dtype.
+    """
+    value = x if scale is None else x * scale.to(x.dtype)
+    norm = torch.linalg.vector_norm(value, dim=-1, keepdim=True, dtype=torch.float32)
+    return value * (threshold / (norm + 1e-6)).clamp(max=1).to(x.dtype)
+
+
+def mix_depth(blocks: torch.Tensor | None, partial: torch.Tensor, queries: torch.Tensor) -> tuple[torch.Tensor, ...]:
     """Mix depth sources independently at each token, once per query.
 
     Args:
-        sources: RMS-normalized tensors of shape [batch, sequence, hidden], one per
-            completed block followed by the current partial block.
+        blocks: RMS-normalized completed blocks of shape [batch, sequence, blocks, hidden], or None.
+        partial: RMS-normalized current block of shape [batch, sequence, hidden].
         queries: FP32 tensor of shape [queries, hidden].
 
     Returns:
-        One tensor of shape [batch, sequence, hidden] per query, in the sources' dtype:
-        the softmax-weighted sum of the sources, weighted by each source's scaled dot
-        product with the query. The softmax runs in FP32.
+        One tensor of shape [batch, sequence, hidden] per query, in partial's dtype: the
+        softmax-weighted sum of the blocks and the partial block, weighted by each
+        source's scaled dot product with the query. The softmax runs in FP32.
     """
-    first = sources[0]
-    queries = queries.to(first.dtype)
-    scores = torch.stack([F.linear(source, queries) for source in sources], dim=-1)
-    weights = (scores.float() * queries.shape[-1] ** -0.5).softmax(-1).to(first.dtype)
-    mixed = []
-    for query in range(queries.shape[0]):
-        total = first * weights[..., query, 0:1]
-        for index in range(1, len(sources)):
-            total = torch.addcmul(total, sources[index], weights[..., query, index : index + 1])
-        mixed.append(total)
-    return tuple(mixed)
+    if blocks is None:
+        # A softmax over one source is one.
+        return (partial,) * queries.shape[0]
+    queries = queries.to(partial.dtype)
+    sources = torch.cat((blocks, partial.unsqueeze(2)), dim=2)
+    scores = sources @ queries.t()
+    weights = (scores.float() * queries.shape[-1] ** -0.5).softmax(2).to(partial.dtype)
+    return (weights.transpose(2, 3) @ sources).unbind(2)
 
 
 class RMSNorm(nn.Module):
@@ -121,7 +164,94 @@ class RMSNorm(nn.Module):
         Returns:
             Tensor of x's shape and dtype.
         """
-        return rms_scale(x, self.eps) * self.weight
+        return _rms_norm(x, self.weight, self.eps)
+
+
+class L2Clip(nn.Module):
+    """Per-head L2 clipping, optionally preceded by learned FP32 per-channel scales."""
+
+    def __init__(self, heads: int, width: int, threshold: float, *, learned_scale: bool) -> None:
+        super().__init__()
+        self.threshold = threshold
+        self.scale = nn.Parameter(torch.ones(heads, width, dtype=torch.float32)) if learned_scale else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Clip head vectors.
+
+        Args:
+            x: Tensor of shape [batch, sequence, heads, width].
+
+        Returns:
+            Tensor of x's shape and dtype.
+        """
+        return l2_clip(x, self.scale, self.threshold)
+
+
+@_fused
+def capped_swiglu(gate_up: torch.Tensor, gate_softcap: float, up_softcap: float) -> torch.Tensor:
+    """Apply Inkling2's softcapped SwiGLU to a fused gate/up projection.
+
+    Args:
+        gate_up: Tensor of shape [..., 2 * intermediate]: gate rows, then up rows.
+        gate_softcap: Positive tanh cap of the gate's linear factor; the sigmoid sees the raw gate.
+        up_softcap: Positive tanh cap of the up branch.
+
+    Returns:
+        Tensor of shape [..., intermediate], in gate_up's dtype.
+    """
+    gate, up = gate_up.chunk(2, dim=-1)
+    capped = torch.tanh(gate / gate_softcap) * torch.sigmoid(gate) * torch.tanh(up / up_softcap)
+    return capped * (gate_softcap * up_softcap)
+
+
+@_fused
+def _static_taps(x: torch.Tensor, taps: torch.Tensor, lag_valid: torch.Tensor | None) -> torch.Tensor:
+    """Add weighted preceding positions with one tap per channel and lag.
+
+    Args:
+        x: Tensor of shape [batch, sequence, channels], zero at padding.
+        taps: Tensor of shape [channels, width] in conv1d order: oldest lag first, current position last.
+        lag_valid: Tensor of shape [batch, sequence, width - 1], or None; see ``TokenLayout``.
+
+    Returns:
+        Tensor of shape [batch, sequence, channels]: (x + taps applied to x) scaled by (width + 1) ** -0.5.
+    """
+    width, sequence = taps.shape[1], x.shape[1]
+    history = F.pad(x, (0, 0, width - 1, 0))
+    result = x * (1 + taps[:, width - 1])
+    for lag in range(1, width):
+        shifted = history[:, width - 1 - lag : width - 1 - lag + sequence]
+        if lag_valid is not None:
+            shifted = shifted * lag_valid[..., lag - 1 : lag]
+        result = result + shifted * taps[:, width - 1 - lag]
+    return result * (width + 1) ** -0.5
+
+
+@_fused
+def _dynamic_taps(
+    x: torch.Tensor, generated: torch.Tensor, static: torch.Tensor, lag_valid: torch.Tensor | None
+) -> torch.Tensor:
+    """Add weighted preceding positions with static per-channel plus generated per-head taps.
+
+    Args:
+        x: Tensor of shape [batch, sequence, channels], zero at padding.
+        generated: Tensor of shape [batch, sequence, heads, width], lag-indexed with the current position first.
+        static: Tensor of shape [width, heads, channels / heads], lag-indexed.
+        lag_valid: Tensor of shape [batch, sequence, width - 1], or None; see ``TokenLayout``.
+
+    Returns:
+        Tensor of shape [batch, sequence, channels]: (x + taps applied to x) scaled by (2 * width + 1) ** -0.5.
+    """
+    batch, sequence, channels = x.shape
+    width, heads = static.shape[0], static.shape[1]
+    history = F.pad(x, (0, 0, width - 1, 0))
+    result = x.view(batch, sequence, heads, -1) * (1 + static[0] + generated[..., 0, None])
+    for lag in range(1, width):
+        shifted = history[:, width - 1 - lag : width - 1 - lag + sequence]
+        if lag_valid is not None:
+            shifted = shifted * lag_valid[..., lag - 1 : lag]
+        result = result + shifted.view(batch, sequence, heads, -1) * (static[lag] + generated[..., lag, None])
+    return result.reshape(batch, sequence, channels) * (2 * width + 1) ** -0.5
 
 
 class CappedSwiGLU(nn.Module):
@@ -158,10 +288,7 @@ class CappedSwiGLU(nn.Module):
         Returns:
             Tensor of shape [batch, sequence, hidden], in x's dtype.
         """
-        gate, up = self.gate_up(x).chunk(2, dim=-1)
-        # The tanh cap bounds the gate's linear factor; the sigmoid still sees the raw gate.
-        capped = torch.tanh(gate / self.gate_softcap) * torch.sigmoid(gate) * torch.tanh(up / self.up_softcap)
-        return self.down(capped * (self.gate_softcap * self.up_softcap))
+        return self.down(capped_swiglu(self.gate_up(x), self.gate_softcap, self.up_softcap))
 
 
 class ShortConvolution(nn.Module):
@@ -222,29 +349,11 @@ class ShortConvolution(nn.Module):
             raise ValueError("dynamic_input is required exactly for a convolution with dynamic taps")
         if layout.valid is not None:
             x = x * layout.valid
-        batch, sequence, _ = x.shape
-        history = F.pad(x, (0, 0, self.width - 1, 0))
-
-        def lagged(lag: int) -> torch.Tensor:
-            """Return x shifted back by ``lag`` positions, [batch, sequence, channels], zero across documents."""
-            shifted = history[:, self.width - 1 - lag : self.width - 1 - lag + sequence]
-            return shifted if layout.lag_valid is None else shifted * layout.lag_valid[..., lag - 1 : lag]
-
         if self.weight is not None:
-            taps = self.weight[:, 0]
-            result = x * (1 + taps[:, self.width - 1])
-            for lag in range(1, self.width):
-                result = torch.addcmul(result, lagged(lag), taps[:, self.width - 1 - lag])
-            scale = (self.width + 1) ** -0.5
+            result = _static_taps(x, self.weight[:, 0], layout.lag_valid)
         else:
             assert self.static_w is not None and self.weight_proj is not None and dynamic_input is not None
-            generated = self.weight_proj(dynamic_input).view(batch, sequence, self.heads, self.width)
+            generated = self.weight_proj(dynamic_input).view(*x.shape[:2], self.heads, self.width)
             static = self.static_w.view(self.width, self.heads, -1)
-            result = x.view(batch, sequence, self.heads, -1) * (1 + static[0] + generated[..., 0, None])
-            for lag in range(1, self.width):
-                per_head = lagged(lag).view(batch, sequence, self.heads, -1)
-                result = torch.addcmul(result, per_head, static[lag] + generated[..., lag, None])
-            result = result.reshape(batch, sequence, self.channels)
-            scale = (2 * self.width + 1) ** -0.5
-        result = result * scale
+            result = _dynamic_taps(x, generated, static, layout.lag_valid)
         return result if layout.valid is None else result * layout.valid
