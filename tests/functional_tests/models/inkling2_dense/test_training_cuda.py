@@ -40,21 +40,31 @@ def exact_fp32_matmul() -> Iterator[None]:
     torch.backends.cuda.matmul.allow_tf32 = previous
 
 
-@pytest.mark.parametrize("packed", [False, True])
-def test_flex_attention_matches_eager_logits_and_gradients(packed: bool) -> None:
-    eager = randomized_model(tiny_config(LOOP), seed=23).cuda()
-    flex = Inkling2DenseForCausalLM(eager.config, backend=FLEX).cuda()
+@pytest.mark.parametrize("rows", ["plain", "documents", "padded"])
+def test_flex_attention_matches_eager_logits_and_gradients(rows: str) -> None:
+    """Rows of 400 tokens span several kernel blocks, and the 150-token window crosses block edges.
+
+    Covers single-document rows, rows holding two documents, and the same with left and right padding.
+    """
+    config = tiny_config(LOOP, max_position_embeddings=512, sliding_window_size=150)
+    eager = randomized_model(config, seed=23).cuda()
+    flex = Inkling2DenseForCausalLM(config, backend=FLEX).cuda()
     flex.load_state_dict(eager.state_dict())
-    ids = torch.randint(0, 64, (2, 32), device="cuda")
+    length = 400
+    ids = torch.randint(0, 64, (2, length), device="cuda")
     inputs: dict[str, torch.Tensor] = {}
-    keep = torch.ones(2, 32, dtype=torch.bool, device="cuda")
-    if packed:
+    keep = torch.ones(2, length, dtype=torch.bool, device="cuda")
+    if rows == "documents":
+        first = torch.cat((torch.arange(170), torch.arange(230)))
+        inputs = {"position_ids": torch.stack((first, torch.arange(length))).long().cuda()}
+    elif rows == "padded":
         keep[0, :3] = False
-        keep[1, 29:] = False
-        first = torch.cat((torch.zeros(3), torch.arange(13), torch.arange(16)))
-        inputs = {"attention_mask": keep, "position_ids": torch.stack((first, torch.arange(32))).long().cuda()}
-    upstream = torch.randn(2, 32, 64, device="cuda") * keep.unsqueeze(-1)
+        keep[1, 380:] = False
+        first = torch.cat((torch.zeros(3), torch.arange(167), torch.arange(230)))
+        inputs = {"attention_mask": keep, "position_ids": torch.stack((first, torch.arange(length))).long().cuda()}
+    upstream = torch.randn(2, length, 64, device="cuda") * keep.unsqueeze(-1)
     expected, actual = eager(ids, **inputs), flex(ids, **inputs)
+    assert torch.isfinite(actual[keep]).all()
     torch.testing.assert_close(actual[keep], expected[keep], rtol=1e-3, atol=1e-3)
     (expected * upstream).sum().backward()
     (actual * upstream).sum().backward()

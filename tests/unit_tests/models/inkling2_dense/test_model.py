@@ -34,7 +34,13 @@ LOOP: Inkling2LoopConfig = {"core_start": 2, "core_end": 6, "num_passes": 3, "ga
 EXPERT_FIELDS = ("n_routed_experts", "num_experts_per_tok", "n_shared_experts", "route_scale", "use_gate_bias")
 
 
-def tiny_config(loop: Inkling2LoopConfig | None = None, dtype: str = "float32") -> Inkling2DenseConfig:
+def tiny_config(
+    loop: Inkling2LoopConfig | None = None,
+    dtype: str = "float32",
+    *,
+    max_position_embeddings: int = 64,
+    sliding_window_size: int = 6,
+) -> Inkling2DenseConfig:
     """Eight layers in blocks of two; layers 3 and 7 use full attention. Positions pass the length-scale floor."""
     return Inkling2DenseConfig(
         hidden_size=32,
@@ -44,10 +50,10 @@ def tiny_config(loop: Inkling2LoopConfig | None = None, dtype: str = "float32") 
         num_key_value_heads=2,
         head_dim=8,
         intermediate_size=48,
-        max_position_embeddings=64,
+        max_position_embeddings=max_position_embeddings,
         d_rel=3,
         rel_extent=8,
-        sliding_window_size=6,
+        sliding_window_size=sliding_window_size,
         local_layer_ids=[0, 1, 2, 4, 5, 6],
         n_layers_per_attn_res_block=2,
         log_scaling_n_floor=4,
