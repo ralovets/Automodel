@@ -169,7 +169,9 @@ leak was investigated and ruled out (causality test now in the suite).
 
 - Full corpus: `/home/roman/storage/corpus-v1-20261014` (2.47 TB parquet, on the
   Crucial T710 `nvme0`).
-- Model sample (2026-11-24, final proportions with 2% multilingual):
+- Decontaminated model sample (use this one for new runs):
+  `/home/roman/ext/corpus-v1-sample-20261124-decontam/`, see Decontamination.
+- Trial C model sample (2026-11-24, final proportions with 2% multilingual):
   `/home/roman/ext/corpus-v1-sample-20261124/` with `holdout.jsonl` (101,075
   docs), `train-a.jsonl` (2.02M docs, 2.4B o200k tokens), `heldout.jsonl` (frozen
   v2: 6,662 docs, 4 MiB per domain, near-copies of training removed).
@@ -190,13 +192,12 @@ leak was investigated and ruled out (causality test now in the suite).
 - The tokenizer decision lives in the datasets repo; cl32k (used by `micro.yaml`
   and `nano.yaml`) is the older choice.
 
-## Decontamination (scan done, removal list rebuilt 2026-11-24, not applied)
+## Decontamination (removal list applied to the model sample 2026-11-24)
 
 Scripts and outputs: `/home/roman/data/analysis/decontam-20261124/` (`run.sh`,
 `source/`). The datasets repo `~/workspace/training-datasets` has the scripts
-under `scripts/decontam-20261124/` (commit `bceefe9`, first rule); the current
-`report.py`, `spotcheck.py` and `spotcheck_added.py` are copied into its working
-tree, uncommitted.
+under `scripts/decontam-20261124/` (commit `51abe77` has the current rule and the
+spot-check scripts; `export.py` is in its working tree, uncommitted).
 - Benchmarks (18 repos, revisions in `fetch.json`):
   `/home/roman/data/datasets/benchmarks-20261124/`. HumanEval(+), MBPP(+),
   LiveCodeBench, BigCodeBench, APPS, CodeContests, CRUXEval, DS-1000, MultiPL-E,
@@ -255,14 +256,28 @@ tree, uncommitted.
   MMLU-Redux). An MBPP prompt is one sentence, so an MBPP prompt without the
   reference solution is caught only in its docstring form (MultiPL-E). A partial
   copy of a DS-1000 or BigCodeBench prompt under 50% is not flagged.
-- Trial C and the baseline trained on samples taken before this list. From
-  per-source rates about 700 of the 2.02M sampled documents are flagged (0.04%),
-  most of them APPS, so the effect on HumanEval / MBPP numbers is small; the
-  tokenizer comparison is not affected.
-- Open: apply the list as an ID filter when sampling (no need to rewrite the
-  corpus), then re-sample and re-tokenize. Keep `opencodereasoning` and
-  `dolmino-code-meta-reasoning` filtered; drop them whole only if APPS or
-  CodeContests become headline evaluations.
+- Applied: `source/export.py` writes `remove.jsonl` (source and text sha256 per
+  flagged document), which `sample_corpus --exclude` reads. The decontaminated
+  model sample is `/home/roman/ext/corpus-v1-sample-20261124-decontam/`, drawn
+  like the trial C sample but also excluding `remove.jsonl` and the 2026-11-24
+  tokenizer sample (the command is in its `report.json` `exclude` list; the
+  first exclude is `tokenizer-corpus-v1-20261123/sample/train-a.jsonl`).
+  - `train-a.jsonl`: 2,023,369 documents, 2.401B tokens, same domain mix. It
+    shares 2,022,638 documents with the trial C split; 739 left (699 flagged,
+    40 from budget shifts) and 731 came in. `holdout.jsonl`: 101,082 documents,
+    33 flagged ones replaced. Neither holds a flagged document or a document of
+    the tokenizer sample.
+  - `heldout.jsonl` is the frozen trial C file, copied unchanged so scores stay
+    comparable: it has no flagged document and no near-copy of the 731 new
+    training documents. Rebuilding it reshuffles the draw (only 1,327 of 6,667
+    documents in common), so do not rerun `build_heldout.py` there.
+  - Not done: tokenizing the new sample. The corpus itself is not rewritten.
+    The tokenizer sample was not decontaminated.
+- Trial C and the baseline trained on the sample taken before this list, with
+  699 flagged documents among 2.02M (0.03%), so the effect on their HumanEval /
+  MBPP numbers is small; the tokenizer comparison is not affected.
+- `opencodereasoning` and `dolmino-code-meta-reasoning` are kept, filtered; drop
+  them whole only if APPS or CodeContests become headline evaluations.
 - Proposed, not approved: HumanEval / MBPP bits per byte on reference solutions
   and pass@k sampling, after decontamination.
 
@@ -285,7 +300,7 @@ tree, uncommitted.
 ## Open items
 
 - Finish trial C and score it (above). Decide the tokenizer.
-- Decide how to apply the decontamination list (above).
+- Tokenize the decontaminated sample (above) before the next training run.
 - Choose the token budget and LR schedule for a real micro (1.64B) run; full
   cl32k data is not on this machine (4 of 32 shards in
   `~/data/datasets/cl32k-python-english-50b-v2`), and a new tokenizer means
@@ -296,9 +311,8 @@ tree, uncommitted.
 - For RL later: no vLLM/SGLang model class for `inkling2_dense`; context must
   grow past 4,096; keep RL in BF16.
 - Datasets repo: `~/workspace/training-datasets` on roman-ws. The sampler,
-  tokenizer runners, pickling fix, demo and first decontamination scripts are
-  committed there; the newer decontamination scripts are uncommitted. Do not
-  commit there without asking.
+  tokenizer runners, pickling fix, demo and decontamination scripts are
+  committed there. Do not commit there without asking.
 
 ## Working conventions
 
