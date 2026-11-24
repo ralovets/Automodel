@@ -98,7 +98,7 @@ Loop facts for training (no published recipe from the authors):
 
 ## Current experiment: micro on the decontaminated sample (running)
 
-Started 2026-11-24 19:52 PST. Question as before (Claude-style 16k against BPE
+Started 2026-11-24 11:52 PST (container logs are in UTC: 19:52). Question as before (Claude-style 16k against BPE
 16k), now with micro and decontaminated data. The user dropped the earlier
 trials (2026-11-24): do not resume or compare against them unless asked.
 
@@ -119,7 +119,7 @@ validation and checkpoint every 1,000, 3 kept, consolidated export at the end.
   commit `e9e81b468` in its `source/`; `launch.sh` there holds the exact
   commands (run it as `bash -ic "bash launch.sh"` for the W&B key).
 - Speed at the 420 W limit: about 13.3K tokens/s per GPU, 5.1 s per update,
-  42.6 GiB; about 20 hours in total, so it should finish near 16:00 on
+  42.6 GiB; about 20.5 hours in total, so it should finish near 08:30 PST on
   2026-11-25.
 - To resume after a stop, add `--wandb.id <id> --wandb.resume allow` to each
   command and copy the `.log` files aside first (`run.sh` truncates them).
