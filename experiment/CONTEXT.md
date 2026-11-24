@@ -190,26 +190,48 @@ leak was investigated and ruled out (causality test now in the suite).
 - The tokenizer decision lives in the datasets repo; cl32k (used by `micro.yaml`
   and `nano.yaml`) is the older choice.
 
-## Decontamination (paused at 42%)
+## Decontamination (scan done, removal list built, not applied)
 
 Scripts: datasets repo `scripts/decontam-20261124/` (uncommitted on the Mac),
-mirrored with outputs in `/home/roman/data/analysis/decontam-20261124/`.
+mirrored with outputs in `/home/roman/data/analysis/decontam-20261124/`. The
+mirror's `source/report.py` has the stricter rule below and `source/spotcheck.py`
+is new; the Mac copy has neither.
 - Benchmarks (18 repos, revisions in `fetch.json`):
   `/home/roman/data/datasets/benchmarks-20261124/`. HumanEval(+), MBPP(+),
   LiveCodeBench, BigCodeBench, APPS, CodeContests, CRUXEval, DS-1000, MultiPL-E,
   MATH/MATH-500, GSM8K, MMLU-Redux, MMLU-Pro, ARC, HellaSwag: 92,182 texts,
-  8.74M word 13-grams.
+  8.74M word 13-grams. APPS is the test split only.
+- Scan: all 2,284 shards (2,474 GB) finished 2026-11-24 05:30. The resume after
+  the drive hang ran with 12 workers in about 3 h 45 min, CPU-bound (about 5 MB/s
+  per worker); the drive stayed clean. `STEP=report bash run.sh` rebuilds the
+  list from `hits/` in about 80 seconds without rescanning.
 - Rule: ignore 13-grams shared by 3 or more benchmark texts; flag a document
-  holding at least half of a benchmark text's remaining 13-grams and at least 8
-  of them. Output is a removal list by document ID; the corpus is not modified.
-- State: 838 of 2,284 shards scanned (1,028 of 2,474 GB) when the corpus drive
-  hung. Resumable:
-  `cd /home/roman/data/analysis/decontam-20261124 && STEP=scan WORKERS=12 bash run.sh`,
-  then `STEP=report bash run.sh` (writes `remove.parquet`, `report.json`).
-  12 workers instead of 24 to go easier on the drive and leave CPU for training
-  (24 workers slowed training by about 25%).
-- Early finding: `dolmino-code-meta-reasoning` contains APPS problems and
-  solutions (about 14% of its first shard).
+  holding at least half of a benchmark text's remaining 13-grams and at least
+  min(8, remaining) of them. Stricter for APPS/CodeContests solutions and
+  MultiPL-E prompts: at least 80% and at least 13, no short-text exception.
+- Why the stricter rule: a 36-document spot check of the first list found 29
+  real copies and 7 weak matches, all on code (CodeContests solutions matching
+  only the author's C++ template, 3-gram APPS snippets such as
+  `a, b, c = map(int, input().split())`, a one-line MultiPL-E prompt, a
+  matplotlib doc comment for DS-1000). Problem statements and questions had no
+  false matches. The stricter rule drops 6 of the 7 (the DS-1000 one stays) and
+  keeps all 29; 10 of 10 sampled dropped documents were false matches (a
+  number-to-words dictionary, Floyd's cycle detection, A+B boilerplate).
+- Result (`remove.parquet`, `report.json`): 461,089 of 1.53B documents, 1.97B
+  of 1.81T o200k tokens (0.11%). The first list (512,991 documents, 2.04B
+  tokens) is kept as `remove-rule1.parquet` / `report-rule1.json`; the samples
+  as `spotcheck-20261124.json` and `spotcheck-dropped-20261124.json`.
+- APPS is most of it: 373K documents and 1.70B tokens, 17,088 of 22,110 APPS
+  texts found. `opencodereasoning` loses 24% of its documents (1.36B tokens)
+  and `dolmino-code-meta-reasoning` 14%; no other source loses more than 1%.
+  Every HumanEval problem (9,159 documents) and every GSM8K problem (4,340) is
+  in the corpus; also LiveCodeBench 631 of 1,055 problems, MBPP 530 of 974,
+  CRUXEval 646 of 800, MMLU-Pro 755, MMLU-Redux 815, MATH 467, HellaSwag 36.
+- Trial C and the baseline trained on samples taken before this list, so their
+  HumanEval / MBPP numbers would be inflated (the tokenizer comparison is not
+  affected).
+- Open: apply the list (filter by ID, or drop `opencodereasoning` and
+  `dolmino-code-meta-reasoning` whole), then re-sample and re-tokenize.
 - Proposed, not approved: HumanEval / MBPP bits per byte on reference solutions
   and pass@k sampling, after decontamination.
 
@@ -232,7 +254,7 @@ mirrored with outputs in `/home/roman/data/analysis/decontam-20261124/`.
 ## Open items
 
 - Finish trial C and score it (above). Decide the tokenizer.
-- Finish decontamination, review the removal list, decide how to apply it.
+- Decide how to apply the decontamination list (above).
 - Choose the token budget and LR schedule for a real micro (1.64B) run; full
   cl32k data is not on this machine (4 of 32 shards in
   `~/data/datasets/cl32k-python-english-50b-v2`), and a new tokenizer means
