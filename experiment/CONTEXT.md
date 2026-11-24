@@ -9,8 +9,8 @@ the state of the work, the decisions behind it and what is open.
 ## Where things are
 
 - Branch `ralovets/exp/mini2`, 21 commits on main, head `d0bd1975a`. Not pushed
-  to GitHub. The Mac checkout `/Users/roman/Projects/Automodel` is at the same
-  commit. This checkout was on `dev/flash`; its uncommitted
+  to GitHub. The Mac is no longer used (2026-11-24): all work is on roman-ws.
+  This checkout was on `dev/flash`; its uncommitted
   `experiment/tokenizer/README.md` edit is `stash@{0}`
   (`git switch dev/flash && git stash pop` to go back).
 - The trial C runs used the code copy at
@@ -190,12 +190,13 @@ leak was investigated and ruled out (causality test now in the suite).
 - The tokenizer decision lives in the datasets repo; cl32k (used by `micro.yaml`
   and `nano.yaml`) is the older choice.
 
-## Decontamination (scan done, removal list built, not applied)
+## Decontamination (scan done, removal list rebuilt 2026-11-24, not applied)
 
-Scripts: datasets repo `scripts/decontam-20261124/` (uncommitted on the Mac),
-mirrored with outputs in `/home/roman/data/analysis/decontam-20261124/`. The
-mirror's `source/report.py` has the stricter rule below and `source/spotcheck.py`
-is new; the Mac copy has neither.
+Scripts and outputs: `/home/roman/data/analysis/decontam-20261124/` (`run.sh`,
+`source/`). The datasets repo `~/workspace/training-datasets` has the scripts
+under `scripts/decontam-20261124/` (commit `bceefe9`, first rule); the current
+`report.py`, `spotcheck.py` and `spotcheck_added.py` are copied into its working
+tree, uncommitted.
 - Benchmarks (18 repos, revisions in `fetch.json`):
   `/home/roman/data/datasets/benchmarks-20261124/`. HumanEval(+), MBPP(+),
   LiveCodeBench, BigCodeBench, APPS, CodeContests, CRUXEval, DS-1000, MultiPL-E,
@@ -204,34 +205,64 @@ is new; the Mac copy has neither.
 - Scan: all 2,284 shards (2,474 GB) finished 2026-11-24 05:30. The resume after
   the drive hang ran with 12 workers in about 3 h 45 min, CPU-bound (about 5 MB/s
   per worker); the drive stayed clean. `STEP=report bash run.sh` rebuilds the
-  list from `hits/` in about 80 seconds without rescanning.
-- Rule: ignore 13-grams shared by 3 or more benchmark texts; flag a document
-  holding at least half of a benchmark text's remaining 13-grams and at least
-  min(8, remaining) of them. Stricter for APPS/CodeContests solutions and
-  MultiPL-E prompts: at least 80% and at least 13, no short-text exception.
-- Why the stricter rule: a 36-document spot check of the first list found 29
-  real copies and 7 weak matches, all on code (CodeContests solutions matching
-  only the author's C++ template, 3-gram APPS snippets such as
-  `a, b, c = map(int, input().split())`, a one-line MultiPL-E prompt, a
-  matplotlib doc comment for DS-1000). Problem statements and questions had no
-  false matches. The stricter rule drops 6 of the 7 (the DS-1000 one stays) and
-  keeps all 29; 10 of 10 sampled dropped documents were false matches (a
-  number-to-words dictionary, Floyd's cycle detection, A+B boilerplate).
-- Result (`remove.parquet`, `report.json`): 461,089 of 1.53B documents, 1.97B
-  of 1.81T o200k tokens (0.11%). The first list (512,991 documents, 2.04B
-  tokens) is kept as `remove-rule1.parquet` / `report-rule1.json`; the samples
-  as `spotcheck-20261124.json` and `spotcheck-dropped-20261124.json`.
-- APPS is most of it: 373K documents and 1.70B tokens, 17,088 of 22,110 APPS
-  texts found. `opencodereasoning` loses 24% of its documents (1.36B tokens)
-  and `dolmino-code-meta-reasoning` 14%; no other source loses more than 1%.
-  Every HumanEval problem (9,159 documents) and every GSM8K problem (4,340) is
-  in the corpus; also LiveCodeBench 631 of 1,055 problems, MBPP 530 of 974,
-  CRUXEval 646 of 800, MMLU-Pro 755, MMLU-Redux 815, MATH 467, HellaSwag 36.
-- Trial C and the baseline trained on samples taken before this list, so their
-  HumanEval / MBPP numbers would be inflated (the tokenizer comparison is not
-  affected).
-- Open: apply the list (filter by ID, or drop `opencodereasoning` and
-  `dolmino-code-meta-reasoning` whole), then re-sample and re-tokenize.
+  list from `hits/` in about 90 seconds without rescanning.
+- Rule (`source/report.py`): ignore 13-grams shared by 3 or more benchmark
+  texts; flag a document holding at least half of a text's remaining 13-grams
+  and at least min(8, remaining) of them. On top of that:
+  - APPS/CodeContests solutions and MultiPL-E prompts need at least 80% and at
+    least 13, with no short-text exception.
+  - Problem statements and questions (texts without reference code) are also
+    flagged at 30% with at least 20 matches. This catches a problem copied
+    without its answer and statements with the LaTeX stripped.
+  - A HumanEval or MBPP problem repeats across HumanEval+, MBPP sanitized, MBPP+
+    and the MultiPL-E translations, so its prompt was ignored as shared text
+    (HumanEval kept 47% of its 13-grams, mostly the reference solution). These
+    texts are scored a second time with the copies of one problem counted once;
+    a document is flagged when either scoring flags it.
+  - Two texts are exempt from the 30% rule: BigCodeBench/922 (it contains the
+    NLTK stopword list) and MMLU-Pro 4919 (the opening of A Tale of Two Cities).
+- Result (`remove.parquet`, `report.json`): 535,349 of 1.53B documents, 2.17B
+  of 1.81T o200k tokens (0.12%).
+- APPS is most of it: 417K documents and 1.81B tokens, 17,088 of 22,110 APPS
+  texts found. `opencodereasoning` loses 25% of its documents (1.41B tokens)
+  and `dolmino-code-meta-reasoning` 15% (229M); no other source loses more than
+  0.1%. Every HumanEval problem (20,442 documents) and every GSM8K problem
+  (7,916) is in the corpus; also MBPP 611 of 974 texts (34,744 documents),
+  LiveCodeBench 781 of 1,055 (21,292), CRUXEval 646 of 800, MATH 982 of 5,000,
+  MMLU-Pro 1,166, MMLU-Redux 922, HellaSwag 184.
+- How the rule got here, with the samples behind each step:
+  - First list: 512,991 documents, 2.04B tokens (`remove-rule1.parquet`). A
+    36-document sample (`spotcheck-20261124.json`) had 29 real copies and 7 weak
+    code matches (C++ templates, `a, b, c = map(int, input().split())`), which
+    led to the 80% rule for solutions.
+  - Second list: 461,089 documents, 1.97B tokens (`remove-rule2.parquet`). 10 of
+    10 sampled dropped documents were false matches
+    (`spotcheck-dropped-20261124.json`). A review then found it missed HumanEval
+    and MBPP prompts without the reference solution, and problem-only copies
+    under 50%.
+  - Current list: adds 74,260 documents (198M tokens) and drops none. In a
+    sample of 51 added documents, 3 per benchmark
+    (`spotcheck-added-20261124.json`), 44 are copies of the benchmark problem, 6
+    hold the public text an item quotes without the question (wikiHow articles
+    for HellaSwag, speeches for MMLU) and 1 is false (a bubble sort against
+    MBPP 101).
+  - The 30% rule on texts with reference code was tried and dropped: it flagged
+    about 38K more documents for generic code (bubble sort, Miller-Rabin, a
+    URL regex, an all-zeros matrix) and a Wikipedia sentence on the Collatz
+    conjecture.
+- Limits: only near-verbatim copies are found, not paraphrases or translations
+  into prose. 910 benchmark texts have no usable 13-grams (mostly CRUXEval, ARC,
+  MMLU-Redux). An MBPP prompt is one sentence, so an MBPP prompt without the
+  reference solution is caught only in its docstring form (MultiPL-E). A partial
+  copy of a DS-1000 or BigCodeBench prompt under 50% is not flagged.
+- Trial C and the baseline trained on samples taken before this list. From
+  per-source rates about 700 of the 2.02M sampled documents are flagged (0.04%),
+  most of them APPS, so the effect on HumanEval / MBPP numbers is small; the
+  tokenizer comparison is not affected.
+- Open: apply the list as an ID filter when sampling (no need to rewrite the
+  corpus), then re-sample and re-tokenize. Keep `opencodereasoning` and
+  `dolmino-code-meta-reasoning` filtered; drop them whole only if APPS or
+  CodeContests become headline evaluations.
 - Proposed, not approved: HumanEval / MBPP bits per byte on reference solutions
   and pass@k sampling, after decontamination.
 
@@ -264,8 +295,10 @@ is new; the Mac copy has neither.
   only for adapter tuning); no BF16-vs-FP32 check on a trained checkpoint.
 - For RL later: no vLLM/SGLang model class for `inkling2_dense`; context must
   grow past 4,096; keep RL in BF16.
-- Datasets repo work (sampler, tokenizer runners, pickling fix, demo,
-  decontamination) is uncommitted on the Mac; do not commit there without asking.
+- Datasets repo: `~/workspace/training-datasets` on roman-ws. The sampler,
+  tokenizer runners, pickling fix, demo and first decontamination scripts are
+  committed there; the newer decontamination scripts are uncommitted. Do not
+  commit there without asking.
 
 ## Working conventions
 
