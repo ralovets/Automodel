@@ -91,3 +91,25 @@ def test_bf16_training_steps_reduce_the_loss() -> None:
         optimizer.zero_grad()
         losses.append(loss.item())
     assert losses[-1] < 0.7 * losses[0]
+
+
+@pytest.mark.parametrize("loop", [None, LOOP], ids=["no_loop", "loop"])
+def test_bf16_flex_path_is_causal_at_full_length(loop) -> None:
+    """Later tokens leave earlier hidden states bitwise unchanged at 4,096 tokens.
+
+    Cuts sit at, just before and just after kernel-block and window edges, so the cached block
+    masks, the 1,024-token window and the short convolutions' shifts are all exercised.
+    """
+    config = tiny_config(loop, dtype="bfloat16", max_position_embeddings=4096, sliding_window_size=1024)
+    model = Inkling2DenseForCausalLM(config, backend=FLEX).cuda()
+    model.load_state_dict(randomized_model(config, seed=31).state_dict())
+    length = 4096
+    ids = torch.randint(0, 64, (1, length), device="cuda")
+    with torch.no_grad():
+        base = model(ids, logits_to_keep=1, output_hidden_states=True).hidden_states
+        for cut in (1, 127, 128, 129, 1023, 1024, 1025, 2048, 4095):
+            changed = ids.clone()
+            changed[0, cut:] = (ids[0, cut:] + 1 + torch.randint(0, 63, (length - cut,), device="cuda")) % 64
+            other = model(changed, logits_to_keep=1, output_hidden_states=True).hidden_states
+            assert torch.equal(base[0, :cut], other[0, :cut]), cut
+            assert not torch.equal(base[0, cut:], other[0, cut:]), cut
