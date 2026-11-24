@@ -96,7 +96,35 @@ Loop facts for training (no published recipe from the authors):
 - Micro's first-step loss is 16.3 (above uniform 10.4): with tied embeddings the
   untrained model predicts the input token. Below 8.4 after 12 updates.
 
-## Current experiment: tokenizer trial C (paused)
+## Current experiment: micro on the decontaminated sample (running)
+
+Started 2026-11-24 19:52 PST. Question as before (Claude-style 16k against BPE
+16k), now with micro and decontaminated data. The user dropped the earlier
+trials (2026-11-24): do not resume or compare against them unless asked.
+
+[micro_tok16k.yaml](micro_tok16k.yaml): micro with the 16,384 vocabulary,
+1,608,640,512 parameters. One run per GPU (`NPROC=1`), 14,000 updates of 65,536
+tokens (917M tokens, 30% of one pass), cosine LR 6e-4 -> 6e-5 after 500 warmup,
+validation and checkpoint every 1,000, 3 kept, consolidated export at the end.
+
+| Run | GPU | Data | W&B |
+|---|---|---|---|
+| `micro-claude-1124-decontam` | 0 | `claude-1124-16k` | https://roman-ws/ralovets/corpus-v1-tokenizers/runs/srdnjwlx |
+| `micro-bpe-1124-decontam` | 1 | `bpe-lines-1124-16k` | https://roman-ws/ralovets/corpus-v1-tokenizers/runs/21t31wuv |
+
+- Data: `~/data/datasets/corpus-v1-decontam/<tokenizer>` (3.06B Claude-style and
+  2.87B BPE training tokens), tokenized from
+  `/home/roman/ext/corpus-v1-sample-20261124-decontam/` with the frozen heldout.
+- Outputs and logs: `~/workspace/checkpoints/mini2-decontam/`; code snapshot of
+  commit `e9e81b468` in its `source/`; `launch.sh` there holds the exact
+  commands (run it as `bash -ic "bash launch.sh"` for the W&B key).
+- Speed at the 420 W limit: about 13.3K tokens/s per GPU, 5.1 s per update,
+  42.6 GiB; about 20 hours in total, so it should finish near 16:00 on
+  2026-11-25.
+- To resume after a stop, add `--wandb.id <id> --wandb.resume allow` to each
+  command and copy the `.log` files aside first (`run.sh` truncates them).
+
+## Earlier: tokenizer trial C (stopped, dropped)
 
 Question: does the Claude-style 16k tokenizer beat a BPE 16k for this model?
 Nano with `nano_tok16k.yaml`, one run per GPU, 14,000 updates (917M tokens),
@@ -271,7 +299,7 @@ spot-check scripts; `export.py` is in its working tree, uncommitted).
     comparable: it has no flagged document and no near-copy of the 731 new
     training documents. Rebuilding it reshuffles the draw (only 1,327 of 6,667
     documents in common), so do not rerun `build_heldout.py` there.
-  - Not done: tokenizing the new sample. The corpus itself is not rewritten.
+  - Tokenized as `~/data/datasets/corpus-v1-decontam/`. The corpus itself is not rewritten.
     The tokenizer sample was not decontaminated.
 - Trial C and the baseline trained on the sample taken before this list, with
   699 flagged documents among 2.02M (0.03%), so the effect on their HumanEval /
@@ -300,7 +328,7 @@ spot-check scripts; `export.py` is in its working tree, uncommitted).
 ## Open items
 
 - Finish trial C and score it (above). Decide the tokenizer.
-- Tokenize the decontaminated sample (above) before the next training run.
+- Score the two micro runs when they finish (`score_bpb.py`, bits per byte).
 - Choose the token budget and LR schedule for a real micro (1.64B) run; full
   cl32k data is not on this machine (4 of 32 shards in
   `~/data/datasets/cl32k-python-english-50b-v2`), and a new tokenizer means
