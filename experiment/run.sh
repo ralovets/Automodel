@@ -11,14 +11,17 @@ NPROC=${NPROC:-2}
 RECIPE=${RECIPE:-experiment/micro.yaml}
 DATA_DIR=${DATA_DIR:-$HOME/data/datasets/cl32k-python-english-50b-v2}
 OUTPUT_DIR=${OUTPUT_DIR:-$HOME/workspace/checkpoints/mini2}
+# Mount the corpus at its own absolute path: Megatron names its index caches after the
+# dataset and tokenizer paths, so a shared mount point lets two corpora share a cache.
+DATA_DIR=$(cd "$DATA_DIR" && pwd -P)
 mkdir -p "$OUTPUT_DIR"
 docker run --rm --gpus all --ipc=host --network host --name "mini2-$name" \
   --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -e RUN_NAME="$name" -e DATA_DIR=/data -e OUTPUT_DIR=/outputs \
+  -e RUN_NAME="$name" -e DATA_DIR="$DATA_DIR" -e OUTPUT_DIR=/outputs \
   -e WANDB_API_KEY -e WANDB_BASE_URL -e WANDB_ENTITY -e WANDB_MODE \
   -e OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" -e TOKENIZERS_PARALLELISM=false \
   -e PYTHONPATH=/opt/Automodel -e PYTHONDONTWRITEBYTECODE=1 \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v "$repo:/opt/Automodel" -v "$DATA_DIR:/data:ro" -v "$OUTPUT_DIR:/outputs" \
+  -v "$repo:/opt/Automodel" -v "$DATA_DIR:$DATA_DIR:ro" -v "$OUTPUT_DIR:/outputs" \
   -w /opt/Automodel "$IMAGE" \
   automodel "$RECIPE" --nproc-per-node "$NPROC" "$@" 2>&1 | tee "$OUTPUT_DIR/$name.log"

@@ -77,8 +77,9 @@ RECIPE=experiment/nano.yaml bash experiment/run.sh nano-smoke
 bash experiment/run.sh micro-smoke
 ```
 
-Inside the container the corpus is `/data` (read-only), outputs `/outputs` and
-the checkout `/opt/Automodel`. Metrics go to W&B and to JSONL files under
+Inside the container the corpus keeps its host path (read-only, so Megatron's
+index caches differ per corpus), outputs are `/outputs` and the checkout
+`/opt/Automodel`. Metrics go to W&B and to JSONL files under
 `OUTPUT_DIR/RUN_NAME/`; the console log is `OUTPUT_DIR/RUN_NAME.log`. The run
 name is also the W&B run ID, so use a new name for a new run. Global batch
 must divide by local batch times rank count.
