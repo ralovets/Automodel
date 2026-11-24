@@ -127,7 +127,14 @@ python experiment/prepare_data.py --tokenizer TOKENIZER_DIR \
 ```
 
 On roman-ws, trial C (2026-11-24, corpus-v1 with 2% multilingual) is under
-`~/data/datasets/corpus-v1-trial-c/{claude-a-16k,bpe-lines-a-16k}`. By bytes
+`~/data/datasets/corpus-v1-trial-c/`, tokenized with `claude-1124-16k` and
+`bpe-lines-1124-16k`. These two were retrained from scratch on a separate
+2.4B-token sample in the final source proportions, sharing no document with
+trial C (datasets repository, `tokenizer/configs/run_corpus_v1_ws.sh`). Against
+the 2026-11-23 `a-16k` pair they use about 9% fewer multilingual tokens and up
+to 0.4% more elsewhere; BPE still needs 6.3% fewer tokens than Claude-style
+(7.5% on python). `claude-a-16k` and `bpe-lines-a-16k` copies are there for
+reference. By bytes
 it is 24.8% python, 19.8% other code, 21.3% code Q&A, 17.3% tech, 10.3% math,
 4.2% general and 2.3% multilingual. Its heldout dropped 54 near-copies and
 holds 6,662 documents. Trial B (`corpus-v1-trial-b`, 0.5% multilingual, an
@@ -135,10 +142,10 @@ unfiltered heldout) is the data of the runs below.
 
 ```bash
 D=$HOME/data/datasets/corpus-v1-trial-c
-IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/claude-a-16k \
-  bash experiment/run.sh tok-claude-a
-IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/bpe-lines-a-16k \
-  bash experiment/run.sh tok-bpe-a
+IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/claude-1124-16k \
+  bash experiment/run.sh tok-claude-1124
+IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/bpe-lines-1124-16k \
+  bash experiment/run.sh tok-bpe-1124
 ```
 
 Loss per token is not comparable across tokenizers. In-training validation
