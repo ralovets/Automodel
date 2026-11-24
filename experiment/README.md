@@ -103,29 +103,55 @@ uvx maturin build --release -m native/Cargo.toml -i python3.12 --out wheels
 docker build -f experiment/tokenizer.Dockerfile -t automodel:mini2-tok wheels
 ```
 
-`prepare_data.py` tokenizes JSONL documents (`text`, `domain`) into training
-shards and one heldout per domain, each a fixed 4 MiB draw of the heldout file,
-the same documents for every tokenizer. It runs inside that image:
+Trial data is built in three steps, inside that image:
+
+1. Sample corpus-v1 in its own proportions with `sample_corpus` from the
+   datasets repository: a 120M-token holdout split and a 2.4B-token training
+   split (o200k tokens), excluding the tokenizers' training sample.
+2. [build_heldout.py](build_heldout.py) freezes 4 MiB per domain of the
+   holdout split, in a fixed random order. A document over 64 KiB contributes
+   one line-aligned excerpt at a hash-derived offset. A document, or its
+   excerpt, is rejected when half or more of its word 13-grams occur in the
+   training split. Every tokenizer is scored on this one file.
+3. [prepare_data.py](prepare_data.py) tokenizes the training split and the
+   frozen heldout.
 
 ```bash
+S=/home/roman/ext/corpus-v1-sample-20261124
+python -m tokenizer_lab.experiments.sample_corpus --corpus /home/roman/storage/corpus-v1-20261014 \
+  --output $S --train-splits 1 --exclude TOKENIZER_SAMPLE/train-a.jsonl
+PYTHONHASHSEED=0 python experiment/build_heldout.py \
+  --holdout $S/holdout.jsonl --train $S/train-a.jsonl --output $S/heldout.jsonl
 python experiment/prepare_data.py --tokenizer TOKENIZER_DIR \
-  --train train-b.jsonl --holdout holdout.jsonl --output DATA_DIR
+  --train $S/train-a.jsonl --holdout $S/heldout.jsonl --output DATA_DIR
 ```
 
-On roman-ws both datasets are under `~/data/datasets/corpus-v1-trial-b/`,
-built from sample B of corpus-v1 (2.4B o200k tokens, not used to train
-`claude-a-16k`) and its 120M-token heldout:
+On roman-ws, trial C (2026-11-24, corpus-v1 with 2% multilingual) is under
+`~/data/datasets/corpus-v1-trial-c/{claude-a-16k,bpe-lines-a-16k}`. By bytes
+it is 24.8% python, 19.8% other code, 21.3% code Q&A, 17.3% tech, 10.3% math,
+4.2% general and 2.3% multilingual. Its heldout dropped 54 near-copies and
+holds 6,662 documents. Trial B (`corpus-v1-trial-b`, 0.5% multilingual, an
+unfiltered heldout) is the data of the runs below.
 
 ```bash
-D=$HOME/data/datasets/corpus-v1-trial-b
+D=$HOME/data/datasets/corpus-v1-trial-c
 IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/claude-a-16k \
   bash experiment/run.sh tok-claude-a
 IMAGE=automodel:mini2-tok RECIPE=experiment/nano_tok16k.yaml DATA_DIR=$D/bpe-lines-a-16k \
   bash experiment/run.sh tok-bpe-a
 ```
 
-Loss per token is not comparable across tokenizers. `DATA_DIR/stats.json` has
-bytes and tokens per heldout: bits per byte = loss × tokens / bytes / ln 2.
+Loss per token is not comparable across tokenizers. In-training validation
+gives curves: bits per byte = loss × tokens / bytes / ln 2, with tokens and
+bytes from `DATA_DIR/stats.json`; it drops each heldout's partial last window.
+For final numbers, [score_bpb.py](score_bpb.py) scores every target once,
+takes Inkling checkpoints or Hugging Face models, and writes per-document NLL
+for paired comparisons:
+
+```bash
+python experiment/score_bpb.py --heldout $S/heldout.jsonl --dataset DATA_DIR --output scores.json \
+  --models inkling:OUTPUT_DIR/RUN/epoch_0_step_13999/model/consolidated Qwen/Qwen2.5-Coder-0.5B
+```
 
 The 200-step smoke of each ran at 66K tokens/s. Bits per byte at step 199, one
 seed, 13M training tokens, so a check that the path works and not a verdict:
@@ -140,8 +166,16 @@ seed, 13M training tokens, so a check that the path works and not a verdict:
 | general | 2.137 | 2.195 |
 | multilingual | 3.291 | 3.257 |
 
-The seven heldouts are 8.7M tokens together and one pass takes about two
-minutes; lower `--holdout-bytes` or validate less often for long runs.
+Baseline `nano-claude-a-baseline-1123` (trial B): 14,000 updates, 917M
+tokens, cosine LR 6e-4 to 6e-5 after 500 warmup steps, 4 h 47 min at 65K
+tokens/s ([W&B](http://roman-ws:8080/ralovets/corpus-v1-tokenizers/runs/quhhxdat)).
+Bits per byte from `score_bpb.py`, with two outside models for scale:
+
+| Model | python | code_other | code_qa | tech | math | general | multilingual |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nano, claude-a-16k, 0.92B tokens | 0.415 | 0.494 | 0.472 | 0.949 | 0.653 | 1.102 | 1.414 |
+| Qwen2.5-Coder-0.5B | 0.320 | 0.330 | 0.426 | 0.761 | 0.526 | 0.834 | 0.959 |
+| Qwen3.5-0.8B | 0.378 | 0.440 | 0.469 | 0.780 | 0.522 | 0.868 | 0.891 |
 
 ## Results
 

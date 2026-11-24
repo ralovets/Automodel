@@ -16,18 +16,17 @@
 
 Input lines are JSON objects with ``text`` and ``domain``. Every document gets the
 tokenizer's EOS appended. The output directory holds ``train/train-NNNNN.{bin,idx}``,
-one heldout per domain under ``validation/`` (a fixed random draw of the heldout
-file, the same documents for every tokenizer), a copy of the tokenizer, and
-``stats.json`` with documents, UTF-8 bytes and tokens per split and domain, which is
-what turns a per-token loss into bits per byte.
+one heldout per domain under ``validation/`` (every record of the frozen heldout
+file from ``build_heldout.py``, in order, so every tokenizer sees the same bytes), a
+copy of the tokenizer, and ``stats.json`` with documents, UTF-8 bytes and tokens per
+split and domain, which is what turns a per-token loss into bits per byte.
 
     python experiment/prepare_data.py --tokenizer TOKENIZER_DIR \
-        --train train.jsonl --holdout holdout.jsonl --output DATA_DIR
+        --train train.jsonl --holdout heldout.jsonl --output DATA_DIR
 """
 
 import argparse
 import json
-import random
 import shutil
 from collections import defaultdict
 from collections.abc import Iterator
@@ -63,10 +62,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tokenizer", type=Path, required=True, help="Transformers tokenizer directory")
     parser.add_argument("--train", type=Path, required=True, help="Training JSONL")
-    parser.add_argument("--holdout", type=Path, required=True, help="Heldout JSONL")
+    parser.add_argument("--holdout", type=Path, required=True, help="Frozen heldout JSONL from build_heldout.py")
     parser.add_argument("--output", type=Path, required=True, help="Dataset directory to create")
     parser.add_argument("--train-shards", type=int, default=4)
-    parser.add_argument("--holdout-bytes", type=int, default=4 << 20, help="UTF-8 bytes of heldout text per domain")
     parser.add_argument("--batch-size", type=int, default=4096, help="Documents per encode call")
     args = parser.parse_args()
 
@@ -94,18 +92,8 @@ def main() -> None:
     for prefix, builder in zip(prefixes, builders):
         builder.finalize(f"{prefix}.idx")
 
-    # The heldout file is grouped by source; draw from all of it in a fixed order.
-    records = [record for batch in read_batches(args.holdout, args.batch_size) for record in batch]
-    random.Random(0).shuffle(records)
-    budget: dict[str, int] = defaultdict(int)
-    chosen = []
-    for record in records:
-        if budget[record["domain"]] < args.holdout_bytes:
-            budget[record["domain"]] += len(record["text"].encode("utf-8"))
-            chosen.append(record)
     heldouts: dict[str, IndexedDatasetBuilder] = {}
-    for start in range(0, len(chosen), args.batch_size):
-        batch = chosen[start : start + args.batch_size]
+    for batch in read_batches(args.holdout, args.batch_size):
         for record, ids in zip(batch, encode(tokenizer, [record["text"] for record in batch])):
             domain = record["domain"]
             if domain not in heldouts:
