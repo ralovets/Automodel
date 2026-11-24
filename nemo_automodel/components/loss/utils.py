@@ -21,6 +21,7 @@ import torch.nn as nn
 from nemo_automodel.components.loss.chunked_ce import ChunkedCrossEntropy
 from nemo_automodel.components.loss.linear_ce_base import LinearCrossEntropy
 from nemo_automodel.components.models.common.lm_head import LMHead
+from nemo_automodel.shared.ddp import unwrap_ddp_model
 
 _DATASET_IGNORE_INDEX = -100
 
@@ -148,8 +149,8 @@ def prepare_lm_weight(
 
     Args:
         loss_fn: Linear-projection loss that owns materialization semantics.
-        model: Model or DDP wrapper whose wrapped module owns the config and
-            output head of global shape [vocab, hidden].
+        model: Model, DDP wrapper, or compiled DDP wrapper whose wrapped module
+            owns the config and output head of global shape [vocab, hidden].
         grad_reduce_group: Group contributing independent token losses.
 
     Returns:
@@ -158,8 +159,7 @@ def prepare_lm_weight(
         share this result across loss calls to retain only one converted copy.
     """
     # Match setup's head/config lookup without changing the training wrapper.
-    if isinstance(model, nn.parallel.DistributedDataParallel):
-        model = model.module
+    model = unwrap_ddp_model(model)
     if isinstance(loss_fn, ChunkedCrossEntropy):
         return loss_fn.prepare_lm_weight(
             _get_lm_head_module(model),
@@ -206,8 +206,7 @@ def calculate_loss(loss_fn: nn.Module, **kwargs: Any) -> torch.Tensor:
             loss_fn_kwargs["logits_dtype"] = kwargs.pop(
                 "logits_dtype", logits.dtype if isinstance(logits, torch.Tensor) else None
             )
-            unwrapped = model.module if isinstance(model, nn.parallel.DistributedDataParallel) else model
-            head = _get_lm_head_module(unwrapped)
+            head = _get_lm_head_module(unwrap_ddp_model(model))
             loss_fn_kwargs["lm_head"] = head if isinstance(head, LMHead) else None
         loss_fn_kwargs.update(
             {

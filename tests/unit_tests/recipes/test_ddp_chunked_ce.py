@@ -79,12 +79,18 @@ def _gpt_neox():
     )
 
 
+def _compiled_ddp(model):
+    # Compiling the DDP wrapper adds a second wrapper that forwards attributes to DDP only.
+    return torch.compile(DDP(model))
+
+
+@pytest.mark.parametrize("wrap", [DDP, _compiled_ddp], ids=["ddp", "compiled_ddp"])
 @pytest.mark.parametrize("model_factory", [_mistral, _gpt_neox])
-def test_ddp_preserves_chunked_ce_capability(ddp_group, model_factory):
+def test_ddp_preserves_chunked_ce_capability(ddp_group, model_factory, wrap):
     model = model_factory()
     loss = ChunkedCrossEntropy(4, compile=False)
     assert _maybe_downgrade_loss_fn(loss, model, False) is loss
-    wrapped = DDP(model)
+    wrapped = wrap(model)
     assert _maybe_downgrade_loss_fn(loss, wrapped, False) is loss
     assert prepare_lm_weight(loss, wrapped) is model.get_output_embeddings().weight
 
@@ -112,8 +118,9 @@ def test_ddp_does_not_invent_logits_to_keep_support(ddp_group):
             _maybe_downgrade_loss_fn(ChunkedCrossEntropy(compile=False), probe, False)
 
 
+@pytest.mark.parametrize("wrap", [DDP, _compiled_ddp], ids=["ddp", "compiled_ddp"])
 @pytest.mark.parametrize("invalid", ["bias", "softcap"])
-def test_ddp_preserves_chunked_ce_head_validation(ddp_group, invalid):
+def test_ddp_preserves_chunked_ce_head_validation(ddp_group, invalid, wrap):
     model = _mistral()
     if invalid == "bias":
         model.lm_head = nn.Linear(16, 32, bias=True)
@@ -124,7 +131,7 @@ def test_ddp_preserves_chunked_ce_head_validation(ddp_group, invalid):
 
         model.config = Gemma2Config(final_logit_softcapping=30.0)
         message = "final_logit_softcapping"
-    wrapped = DDP(model)
+    wrapped = wrap(model)
     loss = ChunkedCrossEntropy(compile=False)
     with pytest.raises(ValueError, match=message):
         _maybe_downgrade_loss_fn(loss, wrapped, False)
