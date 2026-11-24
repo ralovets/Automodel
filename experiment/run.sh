@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Launch a recipe inside the training image. Override any setting via environment:
-#   IMAGE, NPROC, RECIPE, DATA_DIR, OUTPUT_DIR, OMP_NUM_THREADS, WANDB_* (API key, base URL, entity, mode).
+#   IMAGE, GPUS (docker --gpus, e.g. device=1), NPROC, RECIPE, DATA_DIR, OUTPUT_DIR, OMP_NUM_THREADS,
+#   WANDB_* (API key, base URL, entity, mode).
 # Trailing arguments are recipe overrides, e.g. --optimizer.lr 0.0003
 set -euo pipefail
 name=${1:?Usage: run.sh RUN_NAME [recipe overrides...]}
@@ -15,7 +16,7 @@ OUTPUT_DIR=${OUTPUT_DIR:-$HOME/workspace/checkpoints/mini2}
 # dataset and tokenizer paths, so a shared mount point lets two corpora share a cache.
 DATA_DIR=$(cd "$DATA_DIR" && pwd -P)
 mkdir -p "$OUTPUT_DIR"
-docker run --rm --gpus all --ipc=host --network host --name "mini2-$name" \
+docker run --rm --gpus "${GPUS:-all}" --ipc=host --network host --name "mini2-$name" \
   --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e RUN_NAME="$name" -e DATA_DIR="$DATA_DIR" -e OUTPUT_DIR=/outputs \
   -e WANDB_API_KEY -e WANDB_BASE_URL -e WANDB_ENTITY -e WANDB_MODE \
