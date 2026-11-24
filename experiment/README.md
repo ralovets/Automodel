@@ -175,7 +175,7 @@ seed, 13M training tokens, so a check that the path works and not a verdict:
 
 Baseline `nano-claude-a-baseline-1123` (trial B): 14,000 updates, 917M
 tokens, cosine LR 6e-4 to 6e-5 after 500 warmup steps, 4 h 47 min at 65K
-tokens/s ([W&B](http://roman-ws:8080/ralovets/corpus-v1-tokenizers/runs/quhhxdat)).
+tokens/s ([W&B](https://roman-ws/ralovets/corpus-v1-tokenizers/runs/quhhxdat)).
 Bits per byte from `score_bpb.py`, with two outside models for scale:
 
 | Model | python | code_other | code_qa | tech | math | general | multilingual |
