@@ -68,6 +68,18 @@ Loop facts for training (no published recipe from the authors):
 - Gates start near zero, so pass 2 starts as nearly a repeat of pass 1. Open:
   train with the loop from the start, or attach it to a trained no-loop model.
 - Pass count is fixed; no pipeline parallelism with the loop.
+- Decided 2026-11-24: use 3 passes, as Mini does; no sweep over the pass count.
+  Not measured yet: speed and memory at 3 passes (estimate 40% of no-loop speed,
+  about three times the activations; micro at 4,096 may not fit one 98 GB GPU).
+  Still open: loop from scratch against attaching it later.
+- Lead candidate chosen 2026-11-24 ("Mini attention"): hidden 2304, 24 query /
+  8 key-value heads of dim 128 (local and full layers), dense feed-forward
+  5632, 3 passes over layers 6-17, 16k vocabulary: 1.648B parameters (feed-
+  forward 0.941B), counted with the model code. Everything else as micro.
+  Matrix work per token is about 2.0 times today's no-loop micro. Not trained
+  or timed yet; Recipe: `miniattn_tok16k.yaml` (1,647,834,624 parameters).
+  Write-up: `ARCHITECTURE.md`. Comparison arm: micro shape with feed-forward
+  6144 and 8 key-value heads, 3 passes (1.383B).
 
 ## Training stack facts
 
@@ -197,7 +209,17 @@ leak was investigated and ruled out (causality test now in the suite).
 
 - Full corpus: `/home/roman/storage/corpus-v1-20261014` (2.47 TB parquet, on the
   Crucial T710 `nvme0`).
-- Decontaminated model sample (use this one for new runs):
+- Mixed 32B sample for sweeps (2026-11-24, use this one for new runs):
+  `/home/roman/ext/corpus-v1-mix-32b-20261124/`, text only, not tokenized. 21.2M
+  documents, 95.7 GiB, 25.1B o200k tokens (about 32B with the 16k tokenizers),
+  same mix and exclusions as the decontaminated sample, which it contains. One
+  fixed random order in 32 JSONL shards (`train/`), so the first k shards are a
+  sample with the mix of the whole; one shard is about 1B 16k-tokens. Same
+  holdout and frozen heldout. Details and checks in its `README.md`. Shuffled
+  with `tokenizer_lab.experiments.shuffle_sample` (datasets repo, uncommitted).
+  `prepare_data.py` takes one `--train` JSONL, so it needs a small change (or a
+  concatenated file) to tokenize shards.
+- Decontaminated model sample (the two micro runs use it):
   `/home/roman/ext/corpus-v1-sample-20261124-decontam/`, see Decontamination.
 - Trial C model sample (2026-11-24, final proportions with 2% multilingual):
   `/home/roman/ext/corpus-v1-sample-20261124/` with `holdout.jsonl` (101,075
