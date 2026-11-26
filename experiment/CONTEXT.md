@@ -127,6 +127,37 @@ Loop facts for training (no published recipe from the authors):
   separate 4,608 from 9,216. Not measured: each expert's output size. Speed
   with eager attention and the per-expert loop: 1,500 tokens/s at batch 1 (66 GB;
   batch 4 runs out of memory); load 48 s.
+- Untrained transplant, measured 2026-11-25 (`transplant.py`, launcher
+  `~/workspace/checkpoints/mini2-distill/transplant.sh`, results in
+  `mini2-distill/transplant/`). Bits per byte on a heldout subset (first
+  documents of each domain up to 300K Mini tokens, 2.13M tokens; documents
+  concatenated as in `score_bpb.py`):
+
+  | Model | Bits per byte |
+  |---|---:|
+  | Mini | 0.493 |
+  | micro, 14,000 updates (Claude-style 16k), same documents | 0.790 |
+  | micro, 3,000 updates, same documents | 1.000 |
+  | transplant, 8 most used experts, untied head | 1.484 |
+  | transplant, 4 most used experts, untied head | 1.570 |
+  | 8 experts at their mean weight over all tokens | 1.756 |
+  | transplant, feed-forward zeroed | 2.030 |
+  | transplant, feed-forward random | 2.070 |
+  | 8 experts, both embeddings tied to Mini's output projection | 5.047 |
+  | untrained student | 7.190 |
+  | 8 experts, both embeddings tied to Mini's input embedding | 21.68 |
+
+  The transplant is exact on a tiny model whose router always selects every
+  expert (logit difference 3e-7). Dense and upstream store the fused attention
+  projection in different row orders (`[Q, R, gate, sink, K, V]` against
+  `[Q, K, V, R, gate, sink]` plus zero padding); everything else outside the
+  feed-forward copies by name. Mini's embedding and output projection cannot be
+  tied without training, so the student needs an untied head (+463M: 2.37B at
+  4 experts, 3.13B at 8) or training to recover a tied one; the dense model
+  only supports tied, the script unties it in place. Logits over 201,024 rows
+  take 3 GiB per 4,096-token window, so scoring runs one window per forward
+  (6.4K tokens/s for a student, 1.5K for Mini). Not measured: how fast training
+  closes the gap from 1.48 to Mini's 0.49.
 
 ## Training stack facts
 
