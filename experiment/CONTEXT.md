@@ -81,6 +81,53 @@ Loop facts for training (no published recipe from the authors):
   Write-up: `ARCHITECTURE.md`. Comparison arm: micro shape with feed-forward
   6144 and 8 key-value heads, 3 passes (1.383B).
 
+## Distilling from Mini (idea, 2026-11-24, nothing run)
+
+- Teacher on disk: `~/workspace/models/Inkling-2-Mini` (19 GB, NVFP4, with its
+  tokenizer). Serving notes: `~/workspace/inkling-throughput-20261122/README.md`
+  (vLLM, one replica per GPU, about 5.1K output tokens/s over both GPUs).
+- Licence, Roman's reading of the published terms on 2026-11-24: the checkpoint
+  is Apache 2.0 plus the Model Acceptable Use Policy (the local model card says
+  the same). Training on outputs generated locally and initialising matching
+  layers from its weights are allowed; a released checkpoint that reuses weights
+  must carry the licence, state changes and keep attribution / NOTICE. Generate
+  training data from the downloaded checkpoint, not through Tinker: its service
+  terms forbid using the service to develop competing products.
+- Plan sketch if we take Mini's 201,024 vocabulary (tied, 463M; model about
+  2.07B at feed-forward 5632, 1.90B at 4608): copy embedding, attention, norms,
+  convolutions and loop gates from Mini; train each dense feed-forward to match
+  its expert layer; fine-tune end to end with Mini's probabilities as soft
+  labels (teacher in the loop; stored top-k labels for 25B tokens would be
+  about 2 TB); then verified synthetic data. With the 16k tokenizers only text
+  distillation is possible. First measurements: Mini's bits per byte on our
+  heldout, expert usage on code and math, scoring speed.
+- Decided 2026-11-24: focus on distillation. Student: the Mini-attention shape
+  with Mini's vocabulary and a feed-forward that is a whole number of experts
+  wide: working choice 4608 (4 experts, 1.903B built with the model code);
+  9216 (8 experts, 2.668B) is the reference. The width is settled in the
+  compression stage by scoring both on the heldout. Checked on CPU: every student tensor
+  outside the feed-forward has a same-shaped BF16 counterpart in Mini's
+  checkpoint (name map in `ARCHITECTURE.md`); only the experts are NVFP4. Mini's
+  tokenizer gives 10% fewer tokens than the 16k Claude-style one on the heldout
+  (level on code), so the 32B sample is about 29B Mini tokens. No recipe, no
+  transplant code and no distillation loop exist yet.
+- Expert usage, measured 2026-11-25 on 4.0M Mini tokens (first documents of
+  shard 0 of the 32B sample; `expert_usage.py`, launcher
+  `~/workspace/checkpoints/mini2-distill/expert_usage.sh`, results in
+  `mini2-distill/expert-usage/`: `usage.npz`, `summary.json`). Mini's loss on
+  it is 0.898 nats per token. Usage is close to flat: on code plus math the 8
+  most used experts of a layer hold a median 18% of the routing weight (range
+  14–39%; uniform would be 6%), the top 4 hold 10%, the top 32 hold 52%. Half
+  the weight needs 26–41 experts per layer (15 in layer 17), 90% needs 79–100.
+  Code and math share at most 2 of their top 8 experts in 20 of 24 layers. In
+  looped layers 15–17 passes 0 and 1 are concentrated (layer 17: top 8 hold 70%
+  and 64%) and pass 2 is flat with different experts. Consequence: copying 4 or
+  8 experts reproduces little of a feed-forward layer, so it is at most a
+  starting point and the layer-matching stage does the work; coverage does not
+  separate 4,608 from 9,216. Not measured: each expert's output size. Speed
+  with eager attention and the per-expert loop: 1,500 tokens/s at batch 1 (66 GB;
+  batch 4 runs out of memory); load 48 s.
+
 ## Training stack facts
 
 - Image `automodel:mini2` (PyTorch 26.11, TE 2.21; upstream Dockerfile,
@@ -108,7 +155,7 @@ Loop facts for training (no published recipe from the authors):
 - Micro's first-step loss is 16.3 (above uniform 10.4): with tied embeddings the
   untrained model predicts the input token. Below 8.4 after 12 updates.
 
-## Current experiment: micro on the decontaminated sample (running)
+## Tokenizer comparison: micro on the decontaminated sample (finished 2026-11-25)
 
 Started 2026-11-24 11:52 PST (container logs are in UTC: 19:52). Question as before (Claude-style 16k against BPE
 16k), now with micro and decontaminated data. The user dropped the earlier
@@ -130,11 +177,19 @@ validation and checkpoint every 1,000, 3 kept, consolidated export at the end.
 - Outputs and logs: `~/workspace/checkpoints/mini2-decontam/`; code snapshot of
   commit `e9e81b468` in its `source/`; `launch.sh` there holds the exact
   commands (run it as `bash -ic "bash launch.sh"` for the W&B key).
-- Speed at the 420 W limit: about 13.3K tokens/s per GPU, 5.1 s per update,
-  42.6 GiB; about 20.5 hours in total, so it should finish near 08:30 PST on
-  2026-11-25.
-- To resume after a stop, add `--wandb.id <id> --wandb.resume allow` to each
-  command and copy the `.log` files aside first (`run.sh` truncates them).
+- Finished cleanly at update 14,000: Claude-style 10:21 PST, BPE 10:52 PST on
+  2026-11-25 (GPUs capped at 360 W from 21:23 PST on the 24th; 5.8–6.1 s per
+  update, 42.6 GiB).
+- Result, exact bits per byte from `score_bpb.py` on the final checkpoints
+  (`mini2-decontam/scores/*-step13999.*`, `score_final.sh` there), paired over
+  the 6,662 heldout documents: Claude-style 0.7491, BPE 0.7562, −0.93% (95%
+  bootstrap interval over documents −1.04 to −0.81; 64% of documents won).
+  Per set: python −0.56%, code-other −0.42% (both intervals touch zero),
+  code_qa −1.04%, math −0.93%, tech −0.61%, general −0.71%, multilingual
+  −1.62%. The lead in validation bits per byte fell from 4.0% at update 1,000
+  to 0.8% at 14,000. One seed each.
+- Validation bits per byte per checkpoint are in W&B runs `<run>-bpb`
+  (`log_bpb.py`; update 8,000 is missing, its checkpoint was rotated out).
 
 ## Earlier: tokenizer trial C (stopped, dropped)
 
