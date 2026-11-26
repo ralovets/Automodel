@@ -235,7 +235,8 @@ class Inkling2DenseForCausalLM(HFCheckpointingMixin, nn.Module):
         self.message_kv_queries = MessageQueries(config.hidden_size, core_layers) if core_layers else None
         self.output_query = ResidualQuery(config.hidden_size, 1, normalize_values=True)
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype)
-        self.lm_head = Inkling2LMHead(config.hidden_size, config.vocab_size, bias=False, dtype=dtype)
+        # The head owns the logit softcap and returns FP32 logits whatever the weight dtype.
+        self.lm_head = Inkling2LMHead(config, dtype=dtype, logits_dtype=torch.float32)
         self.tie_weights()
         self.initialize_weights()
 
@@ -343,8 +344,7 @@ class Inkling2DenseForCausalLM(HFCheckpointingMixin, nn.Module):
                 if logits_to_keep.ndim != 1 or logits_to_keep.dtype != torch.int64:
                     raise ValueError("logits_to_keep indices must be int64 [kept_sequence]")
                 selected = hidden[:, logits_to_keep]
-            cap = self.config.final_logit_softcapping
-            logits = cap * torch.tanh(self.lm_head(selected) / cap)
+            logits = self.lm_head(selected)
         if output_hidden_states:
             # Automodel's loss contract consumes the final tensor here; HF annotates a
             # tuple of per-layer states.

@@ -41,6 +41,8 @@ from nemo_automodel.components.models.inkling2_dense.layers import CappedSwiGLU
 class _ReferenceFeedForward(CappedSwiGLU):
     """The dense feed-forward behind the upstream layer's expert call signature."""
 
+    gate = None  # the upstream layer looks for a router to replay; a dense feed-forward has none
+
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor | None = None) -> torch.Tensor:
         """Apply the feed-forward to x of shape [batch, sequence, hidden]; padding_mask [batch, sequence] is unused."""
         return super().forward(x)
@@ -105,7 +107,7 @@ class ReferenceDenseModel(Inkling2ForCausalLM):
         self.norm = initialize_rms_norm_module(
             "torch", config.hidden_size, eps=config.rms_norm_eps, dtype=torch.float32
         )
-        self.lm_head = Inkling2LMHead(config.hidden_size, config.vocab_size, bias=False, dtype=torch.float32)
+        self.lm_head = Inkling2LMHead(config, dtype=torch.float32, logits_dtype=torch.float32)
         self.lm_head.weight = self.embed_tokens.weight
         self._copy_weights(model)
 
