@@ -50,8 +50,9 @@ def load(spec: str) -> tuple[torch.nn.Module, object | None]:
         with torch.device("cuda"):
             model = Inkling2DenseForCausalLM(Inkling2DenseConfig.from_pretrained(path), backend=backend)
         state = {key: value for file in sorted(path.glob("*.safetensors")) for key, value in load_file(file).items()}
+        # Checkpoints store every tensor in BF16, including the few the model holds in FP32.
         own = model.state_dict()
-        assert all(own[key].dtype == value.dtype for key, value in state.items() if key in own)
+        state = {key: value.to(own[key].dtype) if key in own else value for key, value in state.items()}
         missing, unexpected = model.load_state_dict(state, strict=False)
         assert not unexpected and set(missing) <= {"lm_head.weight"}, (missing, unexpected)
         model.tie_weights()
